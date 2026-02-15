@@ -102,6 +102,7 @@ At minimum for local/prod you need:
 - `SHOPIFY_API_SECRET`
 - `SHOPIFY_APP_URL`
 - `SCOPES`
+- `SMARTCROP_API_URL` (URL of the deployed Smart Crop FastAPI service)
 
 ### 2) Initialize the database schema
 
@@ -125,6 +126,7 @@ A `render.yaml` is included to provision:
 - A managed PostgreSQL database (`smart-crop-db`)
 - A Node web service (`smart-crop-app`)
 - Automatic `DATABASE_URL` wiring from the database to the app service
+- `SMARTCROP_API_URL` set for the Node service to reach the deployed FastAPI Smart Crop API
 
 The app startup command is:
 
@@ -133,6 +135,8 @@ npm run setup && npm run start
 ```
 
 This guarantees migrations are applied before serving traffic.
+
+> `SMARTCROP_API_URL` is required for Smart Crop and must point to your deployed FastAPI endpoint (prefer Render internal URL when both services are in the same Render workspace; otherwise use the external URL such as `https://smart-crop-api.onrender.com`).
 
 ## What to configure in the `.toml` files
 
