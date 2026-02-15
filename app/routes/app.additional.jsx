@@ -1,3 +1,4 @@
+import { Buffer } from "node:buffer";
 import { useEffect, useMemo } from "react";
 import {
   useFetcher,
@@ -26,15 +27,9 @@ export const action = async ({ request }) => {
   }
 
   const method = formData.get("method") || "auto";
-  const targetFormat = formData.get("targetFormat") || "PNG";
-  const quality = Number(formData.get("quality") || 95);
 
   try {
-    const response = await cropImage(file, {
-      method,
-      targetFormat,
-      quality,
-    });
+    const response = await cropImage(file, { method });
 
     const mimeType = response.headers.get("content-type") || "image/png";
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -43,7 +38,6 @@ export const action = async ({ request }) => {
     return {
       imageDataUrl,
       mimeType,
-      targetFormat,
     };
   } catch (error) {
     return {
@@ -98,23 +92,9 @@ export default function AdditionalPage() {
               <option value="frontal">frontal</option>
               <option value="profile">profile</option>
               <option value="chin">chin</option>
+              <option value="nose">nose</option>
+              <option value="below_lips">below_lips</option>
             </select>
-
-            <label htmlFor="targetFormat">Output format</label>
-            <select id="targetFormat" name="targetFormat" defaultValue="PNG">
-              <option value="PNG">PNG</option>
-              <option value="JPEG">JPEG</option>
-            </select>
-
-            <label htmlFor="quality">JPEG quality (1-100)</label>
-            <input
-              id="quality"
-              name="quality"
-              type="number"
-              min="1"
-              max="100"
-              defaultValue="95"
-            />
 
             <s-button type="submit" {...(isLoading ? { loading: true } : {})}>
               Crop image
@@ -139,11 +119,7 @@ export default function AdditionalPage() {
             />
             <a
               href={fetcher.data.imageDataUrl}
-              download={`cropped.${
-                fetcher.data.targetFormat?.toLowerCase() === "jpeg"
-                  ? "jpg"
-                  : "png"
-              }`}
+              download="cropped.png"
             >
               Download result
             </a>

@@ -1400,12 +1400,10 @@ async def health():
 async def crop_endpoint(
     file: UploadFile = File(...),
     method: str = Form("auto"),
-    target_format: str = Form(None),
-    quality: int = Form(95),
 ):
     """
     Upload an image and return a cropped image.
-    `method` can be: auto (default), head_bust, frontal, profile, chin
+    `method` can be: auto (default), head_bust, frontal, profile, chin, nose, below_lips
     """
     suffix = os.path.splitext(file.filename)[1] or ".jpg"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -1437,6 +1435,10 @@ async def crop_endpoint(
             cropped = crop_profile_image(pil_img, box=box, metadata=metadata)
         elif method == "chin":
             cropped = crop_chin_image(pil_img, box=box, metadata=metadata)
+        elif method == "nose":
+            cropped = crop_nose_image(pil_img, box=box, landmarks=landmarks, metadata=metadata)
+        elif method == "below_lips":
+            cropped = crop_below_lips_image(pil_img, landmarks=landmarks, metadata=metadata)
         else:
             raise HTTPException(status_code=400, detail="Unknown method")
 
@@ -1444,23 +1446,15 @@ async def crop_endpoint(
             raise HTTPException(status_code=500, detail="Cropping failed")
 
         buf = io.BytesIO()
-        fmt = (target_format or "PNG").upper()
-        if fmt == "JPG":
-            fmt = "JPEG"
 
         save_kwargs = {}
         if getattr(cropped, "info", None) and "icc_profile" in cropped.info:
             save_kwargs["icc_profile"] = cropped.info.get("icc_profile")
 
-        if fmt == "JPEG":
-            cropped.save(buf, format="JPEG", quality=quality, **save_kwargs)
-            media_type = "image/jpeg"
-        else:
-            cropped.save(buf, format=fmt, **save_kwargs)
-            media_type = f"image/{fmt.lower()}"
+        cropped.save(buf, format="PNG", **save_kwargs)
 
         buf.seek(0)
-        return StreamingResponse(buf, media_type=media_type)
+        return StreamingResponse(buf, media_type="image/png")
 
     finally:
         try:

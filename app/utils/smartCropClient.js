@@ -1,3 +1,5 @@
+import process from "node:process";
+
 const API_BASE = process.env.SMARTCROP_API_URL || "http://localhost:8000";
 
 export async function cropImage(file, options = {}) {
@@ -5,10 +7,6 @@ export async function cropImage(file, options = {}) {
   form.append("file", file, file.name || "upload");
 
   if (options.method) form.append("method", String(options.method));
-  if (options.targetFormat) {
-    form.append("target_format", String(options.targetFormat));
-  }
-  if (options.quality) form.append("quality", String(options.quality));
 
   const res = await fetch(`${API_BASE}/crop`, {
     method: "POST",
