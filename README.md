@@ -82,15 +82,104 @@ This template is configured with the Shopify Dev MCP. This instructs [Cursor](ht
 
 For more information on the Shopify Dev MCP please read [the  documentation](https://shopify.dev/docs/apps/build/devmcp).
 
+
+## Production-ready DB initialization (Prisma + Render)
+
+This template now assumes **PostgreSQL** in `prisma/schema.prisma`, which is a better fit than SQLite for hosted environments like Render.
+
+### 1) Configure environment variables
+
+Create `.env` from `.env.example` and fill in values:
+
+```bash
+cp .env.example .env
+```
+
+At minimum for local/prod you need:
+
+- `DATABASE_URL`
+- `SHOPIFY_API_KEY`
+- `SHOPIFY_API_SECRET`
+- `SHOPIFY_APP_URL`
+- `SCOPES`
+
+### 2) Initialize the database schema
+
+Use Prisma migrations to create/update your tables:
+
+```bash
+npm run setup
+```
+
+`npm run setup` runs:
+
+1. `prisma generate`
+2. `prisma migrate deploy`
+
+So every environment applies committed migrations consistently.
+
+### 3) Render deployment baseline
+
+A `render.yaml` is included to provision:
+
+- A managed PostgreSQL database (`smart-crop-db`)
+- A Node web service (`smart-crop-app`)
+- Automatic `DATABASE_URL` wiring from the database to the app service
+
+The app startup command is:
+
+```bash
+npm run setup && npm run start
+```
+
+This guarantees migrations are applied before serving traffic.
+
+## What to configure in the `.toml` files
+
+### `shopify.app.toml`
+
+- `client_id`: Your app client ID from Shopify Partners.
+- `name`: App display name in Shopify.
+- `application_url`: Public app base URL (for Render, your `https://<service>.onrender.com` URL or custom domain).
+- `embedded`: Whether app runs embedded in admin.
+
+`[build]`
+- `automatically_update_urls_on_dev`: Lets CLI rewrite dev URLs while tunneling.
+- `include_config_on_deploy`: Pushes config changes during `shopify app deploy`.
+
+`[webhooks]`
+- `api_version`: Admin API version for webhook subscriptions.
+
+`[[webhooks.subscriptions]]`
+- `topics`: Event topic list.
+- `uri`: Relative endpoint in your app.
+
+`[access_scopes]`
+- `scopes`: OAuth scopes your app requests.
+
+`[auth]`
+- `redirect_urls`: Allowed OAuth callback URLs. In production, this must include your live app callback URL(s).
+
+### `shopify.web.toml`
+
+- `name`: Label for this web process in Shopify tooling.
+- `roles`: Which capabilities this process serves (`frontend`, `backend`).
+- `webhooks_path`: Endpoint used for webhook health expectations.
+
+`[commands]`
+- `predev`: Runs before `shopify app dev` (here: Prisma client generation).
+- `dev`: Dev server command (here: applies migrations then starts React Router dev server).
+
+> Important: `shopify.web.toml` is mainly for Shopify CLI app process behavior, while `render.yaml` controls Render infrastructure/runtime.
+
 ## Deployment
 
 ### Application Storage
 
-This template uses [Prisma](https://www.prisma.io/) to store session data, by default using an [SQLite](https://www.sqlite.org/index.html) database.
-The database is defined as a Prisma schema in `prisma/schema.prisma`.
+This template uses [Prisma](https://www.prisma.io/) to store session data, configured for **PostgreSQL** by default in `prisma/schema.prisma`.
 
-This use of SQLite works in production if your app runs as a single instance.
-The database that works best for you depends on the data your app needs and how it is queried.
+PostgreSQL is a better fit for multi-instance hosted environments (like Render) than file-based SQLite.
+The database that works best for you still depends on the data your app needs and how it is queried.
 Here’s a short list of databases providers that provide a free tier to get started:
 
 | Database   | Type             | Hosters                                                                                                                                                                                                                               |
