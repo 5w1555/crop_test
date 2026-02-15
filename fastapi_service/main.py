@@ -1466,7 +1466,7 @@ async def crop_endpoint(
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run("fastapi_service.main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
+    uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
 
 # Estimation of the time complexity:
 # The time complexity of the image processing functions is generally O(n), where n is the number of pixels in the image.
