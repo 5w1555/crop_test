@@ -32,3 +32,5 @@ services:
         value: write_products
       - key: SHOP_CUSTOM_DOMAIN
         sync: false
+      - key: SMARTCROP_API_URL
+        value: https://smart-crop-api.onrender.com
