@@ -1,23 +1,33 @@
 const API_BASE = process.env.SMARTCROP_API_URL || "http://localhost:8000";
 
-export async function cropImage(file) {
-	const form = new FormData();
-	form.append("file", file, file.name || "upload");
+export async function cropImage(file, options = {}) {
+  const form = new FormData();
+  form.append("file", file, file.name || "upload");
 
-	const res = await fetch(`${API_BASE}/crop`, {
-		method: "POST",
-		body: form,
-	});
+  if (options.method) form.append("method", String(options.method));
+  if (options.targetFormat) {
+    form.append("target_format", String(options.targetFormat));
+  }
+  if (options.quality) form.append("quality", String(options.quality));
 
-	if (!res.ok) {
-		const text = await res.text();
-		throw new Error(text || `Crop failed: ${res.status}`);
-	}
+  const res = await fetch(`${API_BASE}/crop`, {
+    method: "POST",
+    body: form,
+  });
 
-	return res.json();
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Crop failed: ${res.status}`);
+  }
+
+  return res;
 }
 
 export async function health() {
-	const res = await fetch(`${API_BASE}/health`);
-	return res.ok;
+  try {
+    const res = await fetch(`${API_BASE}/health`);
+    return res.ok;
+  } catch {
+    return false;
+  }
 }
