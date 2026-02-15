@@ -26,9 +26,15 @@ export const action = async ({ request }) => {
   }
 
   const method = formData.get("method") || "auto";
+  const targetFormat = formData.get("targetFormat") || "PNG";
+  const quality = Number(formData.get("quality") || 95);
 
   try {
-    const response = await cropImage(file, { method });
+    const response = await cropImage(file, {
+      method,
+      targetFormat,
+      quality,
+    });
 
     const mimeType = response.headers.get("content-type") || "image/png";
     const buffer = Buffer.from(await response.arrayBuffer());
@@ -37,7 +43,7 @@ export const action = async ({ request }) => {
     return {
       imageDataUrl,
       mimeType,
-      method,
+      targetFormat,
     };
   } catch (error) {
     return {
@@ -76,8 +82,8 @@ export default function AdditionalPage() {
     <s-page heading="Smart Crop">
       <s-section heading="Crop an image with FastAPI">
         <s-paragraph>
-          Upload an image, select a crop method from <code>main.py</code>, and
-          preview/download the result.
+          Upload an image and this Shopify app route will call the FastAPI
+          service <code>/crop</code> endpoint.
         </s-paragraph>
 
         <fetcher.Form method="post" encType="multipart/form-data">
@@ -92,9 +98,23 @@ export default function AdditionalPage() {
               <option value="frontal">frontal</option>
               <option value="profile">profile</option>
               <option value="chin">chin</option>
-              <option value="nose">nose</option>
-              <option value="below_lips">below_lips</option>
             </select>
+
+            <label htmlFor="targetFormat">Output format</label>
+            <select id="targetFormat" name="targetFormat" defaultValue="PNG">
+              <option value="PNG">PNG</option>
+              <option value="JPEG">JPEG</option>
+            </select>
+
+            <label htmlFor="quality">JPEG quality (1-100)</label>
+            <input
+              id="quality"
+              name="quality"
+              type="number"
+              min="1"
+              max="100"
+              defaultValue="95"
+            />
 
             <s-button type="submit" {...(isLoading ? { loading: true } : {})}>
               Crop image
@@ -117,7 +137,14 @@ export default function AdditionalPage() {
               alt="Cropped output"
               style={{ maxWidth: "100%", borderRadius: 8 }}
             />
-            <a href={fetcher.data.imageDataUrl} download="cropped.png">
+            <a
+              href={fetcher.data.imageDataUrl}
+              download={`cropped.${
+                fetcher.data.targetFormat?.toLowerCase() === "jpeg"
+                  ? "jpg"
+                  : "png"
+              }`}
+            >
               Download result
             </a>
           </s-stack>
