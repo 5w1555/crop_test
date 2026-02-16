@@ -97,7 +97,8 @@ cp .env.example .env
 
 At minimum for local/prod you need:
 
-- `DATABASE_URL`
+- `DATABASE_URL` (for app runtime; with Neon use the pooled URL)
+- `DIRECT_DATABASE_URL` (for Prisma migrations; with Neon use the direct/non-pooled URL)
 - `SHOPIFY_API_KEY`
 - `SHOPIFY_API_SECRET`
 - `SHOPIFY_APP_URL`
@@ -118,6 +119,15 @@ npm run setup
 2. `prisma migrate deploy`
 
 So every environment applies committed migrations consistently.
+
+### Neon-specific connection setup
+
+If you are using Neon, configure both database URLs:
+
+- `DATABASE_URL`: Neon **pooled** connection string (typically contains `-pooler` host), with `sslmode=require&pgbouncer=true`.
+- `DIRECT_DATABASE_URL`: Neon **direct/non-pooled** connection string, with `sslmode=require`.
+
+This split ensures runtime queries use pooling while Prisma migrations use a direct connection.
 
 ### 3) Render deployment baseline
 
@@ -216,6 +226,31 @@ Using pnpm:
 ```shell
 pnpm run build
 ```
+
+## Test checklist (post-merge)
+
+After merging major changes, validate both app layers:
+
+### Automated checks
+
+- `npm run lint`
+- `npm run typecheck`
+- `npm test` (covers Smart Crop client request/health behavior)
+
+### Manual end-to-end checks
+
+1. **Embedded app auth flow**: install app in a dev store and confirm OAuth/login still works.
+2. **Smart Crop API connectivity**: open **Additional** page and confirm status shows connected when `SMARTCROP_API_URL` is valid.
+3. **Crop methods matrix**: upload at least one image and verify each method (`auto`, `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`) returns an image without server error.
+4. **Validation errors**: submit with missing/invalid file and confirm the UI shows an error banner/toast.
+5. **Output verification**: ensure returned image preview renders and download link saves a valid PNG.
+6. **Webhook/session regression**: reinstall/uninstall app once to confirm webhook handling and session persistence are unaffected.
+
+### FastAPI smoke checks
+
+- `GET /health` returns 200.
+- `POST /crop` returns image bytes and proper `Content-Type: image/png`.
+- Unsupported method returns a handled error (not 500 crash).
 
 ## Hosting
 
