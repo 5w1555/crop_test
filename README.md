@@ -97,7 +97,8 @@ cp .env.example .env
 
 At minimum for local/prod you need:
 
-- `DATABASE_URL`
+- `DATABASE_URL` (for app runtime; with Neon use the pooled URL)
+- `DIRECT_DATABASE_URL` (for Prisma migrations; with Neon use the direct/non-pooled URL)
 - `SHOPIFY_API_KEY`
 - `SHOPIFY_API_SECRET`
 - `SHOPIFY_APP_URL`
@@ -118,6 +119,15 @@ npm run setup
 2. `prisma migrate deploy`
 
 So every environment applies committed migrations consistently.
+
+### Neon-specific connection setup
+
+If you are using Neon, configure both database URLs:
+
+- `DATABASE_URL`: Neon **pooled** connection string (typically contains `-pooler` host), with `sslmode=require&pgbouncer=true`.
+- `DIRECT_DATABASE_URL`: Neon **direct/non-pooled** connection string, with `sslmode=require`.
+
+This split ensures runtime queries use pooling while Prisma migrations use a direct connection.
 
 ### 3) Render deployment baseline
 
