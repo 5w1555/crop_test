@@ -32,6 +32,8 @@ services:
         value: write_products
       - key: SHOP_CUSTOM_DOMAIN
         sync: false
+      - key: SMARTCROP_API_URL
+        sync: false
 
   - type: web
     name: smart-crop-api
@@ -41,3 +43,6 @@ services:
     rootDir: fastapi_service
     buildCommand: pip install -r requirements.txt
     startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SMARTCROP_FRONTEND_ORIGINS
+        sync: false

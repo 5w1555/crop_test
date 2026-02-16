@@ -1,14 +1,28 @@
 import { Buffer } from "node:buffer";
-import { useEffect, useMemo } from "react";
-import {
-  useFetcher,
-  useLoaderData,
-  useRouteError,
-} from "react-router";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { cropImage, health } from "../utils/smartCropClient";
+
+const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
+
+function validateImageFile(file) {
+  if (!(file instanceof File)) {
+    return "Please upload an image.";
+  }
+
+  if (!file.type.startsWith("image/")) {
+    return "Only image files are supported.";
+  }
+
+  if (file.size > MAX_FILE_SIZE_BYTES) {
+    return "File must be 10MB or smaller.";
+  }
+
+  return null;
+}
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
@@ -21,9 +35,10 @@ export const action = async ({ request }) => {
 
   const formData = await request.formData();
   const file = formData.get("file");
+  const fileError = validateImageFile(file);
 
-  if (!(file instanceof File)) {
-    return { error: "Please upload an image." };
+  if (fileError) {
+    return { error: fileError };
   }
 
   const method = formData.get("method") || "auto";
@@ -38,6 +53,7 @@ export const action = async ({ request }) => {
     return {
       imageDataUrl,
       mimeType,
+      outputSizeBytes: buffer.byteLength,
     };
   } catch (error) {
     return {
@@ -49,11 +65,17 @@ export const action = async ({ request }) => {
   }
 };
 
-export default function AdditionalPage() {
+export default function CropImagePage() {
   const { apiHealthy } = useLoaderData();
   const fetcher = useFetcher();
   const shopify = useAppBridge();
-  const isLoading =
+
+  const inputRef = useRef(null);
+  const [fileError, setFileError] = useState("");
+  const [hasSelectedFile, setHasSelectedFile] = useState(false);
+  const [outputDimensions, setOutputDimensions] = useState(null);
+
+  const isPosting =
     ["loading", "submitting"].includes(fetcher.state) &&
     fetcher.formMethod === "POST";
 
@@ -67,23 +89,66 @@ export default function AdditionalPage() {
     }
   }, [fetcher.data, shopify]);
 
+  useEffect(() => {
+    if (!fetcher.data?.imageDataUrl) {
+      setOutputDimensions(null);
+      return;
+    }
+
+    const img = new Image();
+    img.onload = () => {
+      setOutputDimensions({ width: img.naturalWidth, height: img.naturalHeight });
+    };
+    img.src = fetcher.data.imageDataUrl;
+  }, [fetcher.data?.imageDataUrl]);
+
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
     return "FastAPI service is unreachable";
   }, [apiHealthy]);
 
+  const loadingText = useMemo(() => {
+    if (!isPosting) return "";
+
+    if (fetcher.state === "submitting") {
+      return "Uploading…";
+    }
+
+    return "Cropping…";
+  }, [fetcher.state, isPosting]);
+
+  const downloadName = useMemo(() => {
+    const mime = fetcher.data?.mimeType || "image/png";
+    const extension = mime.includes("jpeg") ? "jpg" : mime.split("/")[1] || "png";
+    return `cropped-output.${extension}`;
+  }, [fetcher.data?.mimeType]);
+
   return (
-    <s-page heading="Smart Crop">
-      <s-section heading="Crop an image with FastAPI">
+    <s-page heading="Crop Image">
+      <s-section heading="Upload and crop">
         <s-paragraph>
-          Upload an image and this Shopify app route will call the FastAPI
-          service <code>/crop</code> endpoint.
+          Upload a source image, choose a crop method, and run Smart Crop.
         </s-paragraph>
 
         <fetcher.Form method="post" encType="multipart/form-data">
           <s-stack direction="block" gap="base">
             <label htmlFor="file">Image file</label>
-            <input id="file" name="file" type="file" accept="image/*" required />
+            <input
+              id="file"
+              name="file"
+              ref={inputRef}
+              type="file"
+              accept="image/*"
+              required
+              onChange={(event) => {
+                const nextFile = event.currentTarget.files?.[0];
+                const nextError = validateImageFile(nextFile);
+
+                setHasSelectedFile(Boolean(nextFile));
+                setFileError(nextError || "");
+              }}
+            />
+            {fileError && <s-text tone="critical">{fileError}</s-text>}
 
             <label htmlFor="method">Crop method</label>
             <select id="method" name="method" defaultValue="auto">
@@ -96,9 +161,15 @@ export default function AdditionalPage() {
               <option value="below_lips">below_lips</option>
             </select>
 
-            <s-button type="submit" {...(isLoading ? { loading: true } : {})}>
+            <s-button
+              type="submit"
+              disabled={!hasSelectedFile || Boolean(fileError) || isPosting}
+              {...(isPosting ? { loading: true } : {})}
+            >
               Crop image
             </s-button>
+
+            {loadingText && <s-text>{loadingText}</s-text>}
           </s-stack>
         </fetcher.Form>
       </s-section>
@@ -117,12 +188,38 @@ export default function AdditionalPage() {
               alt="Cropped output"
               style={{ maxWidth: "100%", borderRadius: 8 }}
             />
-            <a
-              href={fetcher.data.imageDataUrl}
-              download="cropped.png"
-            >
-              Download result
-            </a>
+
+            <s-stack direction="block" gap="tight">
+              {outputDimensions && (
+                <s-paragraph>
+                  Dimensions: {outputDimensions.width} × {outputDimensions.height}
+                </s-paragraph>
+              )}
+              <s-paragraph>File type: {fetcher.data.mimeType || "image/png"}</s-paragraph>
+              {fetcher.data.outputSizeBytes && (
+                <s-paragraph>
+                  File size: {(fetcher.data.outputSizeBytes / 1024).toFixed(1)} KB
+                </s-paragraph>
+              )}
+            </s-stack>
+
+            <s-stack direction="inline" gap="base">
+              <s-button
+                variant="secondary"
+                onClick={() => {
+                  setOutputDimensions(null);
+                  setHasSelectedFile(false);
+                  setFileError("");
+                  inputRef.current?.form?.reset();
+                  inputRef.current?.focus();
+                }}
+              >
+                Re-crop
+              </s-button>
+              <a href={fetcher.data.imageDataUrl} download={downloadName}>
+                Download
+              </a>
+            </s-stack>
           </s-stack>
         )}
       </s-section>
