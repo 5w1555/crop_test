@@ -217,6 +217,31 @@ Using pnpm:
 pnpm run build
 ```
 
+## Test checklist (post-merge)
+
+After merging major changes, validate both app layers:
+
+### Automated checks
+
+- `npm run lint`
+- `npm run typecheck`
+- `npm test` (covers Smart Crop client request/health behavior)
+
+### Manual end-to-end checks
+
+1. **Embedded app auth flow**: install app in a dev store and confirm OAuth/login still works.
+2. **Smart Crop API connectivity**: open **Additional** page and confirm status shows connected when `SMARTCROP_API_URL` is valid.
+3. **Crop methods matrix**: upload at least one image and verify each method (`auto`, `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`) returns an image without server error.
+4. **Validation errors**: submit with missing/invalid file and confirm the UI shows an error banner/toast.
+5. **Output verification**: ensure returned image preview renders and download link saves a valid PNG.
+6. **Webhook/session regression**: reinstall/uninstall app once to confirm webhook handling and session persistence are unaffected.
+
+### FastAPI smoke checks
+
+- `GET /health` returns 200.
+- `POST /crop` returns image bytes and proper `Content-Type: image/png`.
+- Unsupported method returns a handled error (not 500 crash).
+
 ## Hosting
 
 When you're ready to set up your app in production, you can follow [our deployment documentation](https://shopify.dev/docs/apps/deployment/web) to host your app on a cloud provider like [Heroku](https://www.heroku.com/) or [Fly.io](https://fly.io/).
