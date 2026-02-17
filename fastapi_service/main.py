@@ -1711,14 +1711,17 @@ def image_to_buffer(image, output_format: str):
 
 @app.post("/crop/batch")
 async def crop_batch_endpoint(
-    files: list[UploadFile] = File(...),
+    files: list[UploadFile] | None = File(default=None),
+    file: list[UploadFile] | None = File(default=None),
     method: str = Form("auto"),
 ):
     """
     Upload multiple images and return a ZIP containing cropped outputs in original formats.
     Invalid files are skipped and recorded in manifest.json inside the ZIP.
     """
-    if not files:
+    uploaded_files = files or file or []
+
+    if not uploaded_files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
     zip_buffer = io.BytesIO()
@@ -1726,7 +1729,7 @@ async def crop_batch_endpoint(
     used_output_names = {}
 
     with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-        for index, uploaded_file in enumerate(files, start=1):
+        for index, uploaded_file in enumerate(uploaded_files, start=1):
             suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
             tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
             input_name = uploaded_file.filename or f"image_{index}{suffix}"
