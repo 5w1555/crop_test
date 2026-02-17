@@ -26,7 +26,11 @@ except ImportError:
 # ----------------------------
 # Face Detection Model (InsightFace)
 # ----------------------------
-def get_insightface_model():
+_INSIGHTFACE_MODEL = None
+_INSIGHTFACE_MODEL_LOCK = threading.Lock()
+
+
+def load_insightface_model():
     """
     Load lightweight InsightFace FaceAnalysis model for face detection + 5-point landmarks.
     """
@@ -38,8 +42,14 @@ def get_insightface_model():
     return app
 
 
-# Instantiate it once for the app
-model = get_insightface_model()
+def get_insightface_model():
+    """Lazily initialize and cache the InsightFace model."""
+    global _INSIGHTFACE_MODEL
+    if _INSIGHTFACE_MODEL is None:
+        with _INSIGHTFACE_MODEL_LOCK:
+            if _INSIGHTFACE_MODEL is None:
+                _INSIGHTFACE_MODEL = load_insightface_model()
+    return _INSIGHTFACE_MODEL
 
 def heic_available():
     """
@@ -444,10 +454,8 @@ def get_face_and_landmarks(
         tuple: (box, landmarks, cv_img, pil_img, metadata)
                If detection fails, `box` is None.
     """
-    # ✅ Choose model: use shared one if provided, else fallback to global
-    face_model = model if model is not None else globals().get("model")
-    if face_model is None:
-        face_model = get_insightface_model()
+    # ✅ Choose model: use provided shared model, else lazily load singleton.
+    face_model = model if model is not None else get_insightface_model()
 
     # Step 1: Load and validate image
     cv_img, pil_img, metadata = read_image(input_path, sharpen=sharpen)
