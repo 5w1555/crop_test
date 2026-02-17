@@ -3,6 +3,7 @@ import io
 import math
 import json
 import zipfile
+import mimetypes
 import threading
 import queue
 import concurrent.futures
@@ -1584,8 +1585,12 @@ async def crop_endpoint(
         tmp.flush()
         tmp.close()
         cropped = run_crop_pipeline(tmp.name, method)
-        buf = image_to_png_buffer(cropped)
-        return StreamingResponse(buf, media_type="image/png")
+        output_info = resolve_output_format(file.filename, file.content_type)
+        buf = image_to_buffer(cropped, output_info['pil_format'])
+        headers = {
+            "Content-Disposition": f'attachment; filename="{Path(file.filename or "cropped").stem}_cropped.{output_info["extension"]}"'
+        }
+        return StreamingResponse(buf, media_type=output_info['media_type'], headers=headers)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1640,12 +1645,63 @@ def run_crop_pipeline(
     return cropped
 
 
-def image_to_png_buffer(image):
+def resolve_output_format(filename: str | None, content_type: str | None):
+    extension = (Path(filename or "").suffix or "").lower().lstrip(".")
+
+    if not extension and content_type:
+        guessed = mimetypes.guess_extension(content_type)
+        if guessed:
+            extension = guessed.lower().lstrip(".")
+
+    resolved = FORMAT_MAP.get(extension)
+    if not resolved:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported or missing file format for '{filename or 'upload'}'",
+        )
+
+    pil_format = "HEIF" if resolved == "HEIC" else resolved
+
+    extension_map = {
+        "HEIC": "heic",
+        "JPEG": "jpg",
+        "TIFF": "tiff",
+        "PNG": "png",
+        "WEBP": "webp",
+        "BMP": "bmp",
+        "GIF": "gif",
+    }
+    normalized_extension = extension_map.get(resolved, extension or "img")
+
+    media_type_map = {
+        "HEIC": "image/heic",
+        "JPEG": "image/jpeg",
+        "TIFF": "image/tiff",
+        "PNG": "image/png",
+        "WEBP": "image/webp",
+        "BMP": "image/bmp",
+        "GIF": "image/gif",
+    }
+    media_type = media_type_map.get(resolved, "application/octet-stream")
+
+    return {
+        "resolved": resolved,
+        "pil_format": pil_format,
+        "extension": normalized_extension,
+        "media_type": media_type,
+    }
+
+
+def image_to_buffer(image, output_format: str):
     image_buf = io.BytesIO()
     save_kwargs = {}
     if getattr(image, "info", None) and "icc_profile" in image.info:
         save_kwargs["icc_profile"] = image.info.get("icc_profile")
-    image.save(image_buf, format="PNG", **save_kwargs)
+
+    if output_format in ("HEIF", "JPEG") and image.mode != "RGB":
+        image = image.convert("RGB")
+
+    image.save(image_buf, format=output_format, **save_kwargs)
     image_buf.seek(0)
     return image_buf
 
@@ -1656,7 +1712,7 @@ async def crop_batch_endpoint(
     method: str = Form("auto"),
 ):
     """
-    Upload multiple images and return a ZIP containing cropped PNG outputs.
+    Upload multiple images and return a ZIP containing cropped outputs in original formats.
     Invalid files are skipped and recorded in manifest.json inside the ZIP.
     """
     if not files:
@@ -1683,14 +1739,15 @@ async def crop_batch_endpoint(
 
                 cropped = run_crop_pipeline(tmp.name, method)
 
+                output_info = resolve_output_format(input_name, uploaded_file.content_type)
                 output_stem = Path(input_name).stem or f"image_{index}"
                 base_output_name = f"{output_stem}_cropped"
                 name_count = used_output_names.get(base_output_name, 0)
                 used_output_names[base_output_name] = name_count + 1
                 suffix_name = f"_{name_count}" if name_count else ""
-                output_filename = f"{base_output_name}{suffix_name}.png"
+                output_filename = f"{base_output_name}{suffix_name}.{output_info['extension']}"
 
-                zip_file.writestr(output_filename, image_to_png_buffer(cropped).getvalue())
+                zip_file.writestr(output_filename, image_to_buffer(cropped, output_info['pil_format']).getvalue())
                 manifest["processed"].append(
                     {
                         "input": input_name,
