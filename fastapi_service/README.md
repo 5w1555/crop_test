@@ -24,3 +24,24 @@ docker run -p 8000:8000 -e SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000" sm
 ```
 
 The service exposes `/health` and a POST `/crop` endpoint that accepts a file upload.
+
+
+## API
+
+### `POST /crop`
+- Multipart form fields:
+  - `file`: single image upload
+  - `method`: one of `auto` (default), `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`
+- Response: cropped image stream in the **same format as the input file** (for example JPEG→JPEG, HEIC→HEIC).
+
+### `POST /crop/batch`
+- Multipart form fields:
+  - `files`: multiple image uploads (`files` can be repeated in form-data)
+  - `method`: one of `auto` (default), `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`
+- Behavior:
+  - Reuses the same crop pipeline as `/crop` for each image (face detect + selected method + fallback crop when no face is detected).
+  - Skips invalid/failed files and records failures in `manifest.json` inside the ZIP payload.
+  - If every file fails, returns HTTP 400 with failure details.
+- Response:
+  - ZIP stream (`application/zip`) with files named `<original-stem>_cropped.<original-ext>` (deduplicated with numeric suffixes when needed), preserving each file's original image format.
+  - `Content-Disposition: attachment; filename="cropped_batch.zip"`.
