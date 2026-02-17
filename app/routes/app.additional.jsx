@@ -4,7 +4,7 @@ import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { cropImage, health } from "../utils/smartCropClient";
+import { cropImages, health } from "../utils/smartCropClient";
 
 const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const CROP_METHODS = [
@@ -65,109 +65,6 @@ function validateImageFile(file) {
   return null;
 }
 
-const CRC32_TABLE = new Uint32Array(256).map((_, index) => {
-  let crc = index;
-  for (let i = 0; i < 8; i += 1) {
-    crc = (crc & 1) !== 0 ? 0xedb88320 ^ (crc >>> 1) : crc >>> 1;
-  }
-  return crc >>> 0;
-});
-
-function crc32(bytes) {
-  let crc = 0xffffffff;
-  for (const byte of bytes) {
-    crc = CRC32_TABLE[(crc ^ byte) & 0xff] ^ (crc >>> 8);
-  }
-  return (crc ^ 0xffffffff) >>> 0;
-}
-
-function concatUint8Arrays(chunks) {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const output = new Uint8Array(totalLength);
-  let offset = 0;
-  chunks.forEach((chunk) => {
-    output.set(chunk, offset);
-    offset += chunk.length;
-  });
-  return output;
-}
-
-function dataUrlToBytes(dataUrl) {
-  const [, base64 = ""] = dataUrl.split(",");
-  return Uint8Array.from(atob(base64), (char) => char.charCodeAt(0));
-}
-
-function buildZipArchive(files) {
-  const encoder = new TextEncoder();
-  const localFileHeaders = [];
-  const centralDirectoryHeaders = [];
-  let currentOffset = 0;
-
-  files.forEach((file) => {
-    const fileNameBytes = encoder.encode(file.name);
-    const fileBytes = dataUrlToBytes(file.imageDataUrl);
-    const checksum = crc32(fileBytes);
-
-    const localHeader = new Uint8Array(30 + fileNameBytes.length);
-    const localView = new DataView(localHeader.buffer);
-    localView.setUint32(0, 0x04034b50, true);
-    localView.setUint16(4, 20, true);
-    localView.setUint16(6, 0, true);
-    localView.setUint16(8, 0, true);
-    localView.setUint16(10, 0, true);
-    localView.setUint16(12, 0, true);
-    localView.setUint32(14, checksum, true);
-    localView.setUint32(18, fileBytes.length, true);
-    localView.setUint32(22, fileBytes.length, true);
-    localView.setUint16(26, fileNameBytes.length, true);
-    localView.setUint16(28, 0, true);
-    localHeader.set(fileNameBytes, 30);
-    localFileHeaders.push(localHeader, fileBytes);
-
-    const centralHeader = new Uint8Array(46 + fileNameBytes.length);
-    const centralView = new DataView(centralHeader.buffer);
-    centralView.setUint32(0, 0x02014b50, true);
-    centralView.setUint16(4, 20, true);
-    centralView.setUint16(6, 20, true);
-    centralView.setUint16(8, 0, true);
-    centralView.setUint16(10, 0, true);
-    centralView.setUint16(12, 0, true);
-    centralView.setUint16(14, 0, true);
-    centralView.setUint32(16, checksum, true);
-    centralView.setUint32(20, fileBytes.length, true);
-    centralView.setUint32(24, fileBytes.length, true);
-    centralView.setUint16(28, fileNameBytes.length, true);
-    centralView.setUint16(30, 0, true);
-    centralView.setUint16(32, 0, true);
-    centralView.setUint16(34, 0, true);
-    centralView.setUint16(36, 0, true);
-    centralView.setUint32(38, 0, true);
-    centralView.setUint32(42, currentOffset, true);
-    centralHeader.set(fileNameBytes, 46);
-    centralDirectoryHeaders.push(centralHeader);
-
-    currentOffset += localHeader.length + fileBytes.length;
-  });
-
-  const centralDirectory = concatUint8Arrays(centralDirectoryHeaders);
-
-  const endHeader = new Uint8Array(22);
-  const endView = new DataView(endHeader.buffer);
-  endView.setUint32(0, 0x06054b50, true);
-  endView.setUint16(4, 0, true);
-  endView.setUint16(6, 0, true);
-  endView.setUint16(8, files.length, true);
-  endView.setUint16(10, files.length, true);
-  endView.setUint32(12, centralDirectory.length, true);
-  endView.setUint32(16, currentOffset, true);
-  endView.setUint16(20, 0, true);
-
-  return new Blob(
-    [...localFileHeaders, centralDirectory, endHeader],
-    { type: "application/zip" },
-  );
-}
-
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
   const apiHealthy = await health();
@@ -179,6 +76,7 @@ export const action = async ({ request }) => {
 
   const formData = await request.formData();
   const files = formData.getAll("file");
+
   if (!files.length) return { error: "Please upload at least one image." };
 
   for (const file of files) {
@@ -191,26 +89,23 @@ export const action = async ({ request }) => {
   const method = formData.get("method") || "auto";
 
   try {
-    const results = await Promise.all(
-      files.map(async (file) => {
-        const response = await cropImage(file, { method });
-        const mimeType = response.headers.get("content-type") || "image/png";
-        const buffer = Buffer.from(await response.arrayBuffer());
-        const extension = mimeType.includes("jpeg") ? "jpg" : mimeType.split("/")[1] || "png";
-        const safeBaseName = (file.name || "output")
-          .replace(/\.[^.]+$/, "")
-          .replace(/[^a-zA-Z0-9_-]+/g, "-");
+    const response = await cropImages(files, { method });
+    const mimeType = response.headers.get("content-type") || "application/octet-stream";
 
-        return {
-          name: `${safeBaseName || "output"}-cropped.${extension}`,
-          mimeType,
-          outputSizeBytes: buffer.byteLength,
-          imageDataUrl: `data:${mimeType};base64,${buffer.toString("base64")}`,
-        };
-      }),
-    );
+    if (!mimeType.includes("application/zip")) {
+      return {
+        error: `Expected application/zip response but received ${mimeType}.`,
+      };
+    }
 
-    return { results };
+    const buffer = Buffer.from(await response.arrayBuffer());
+
+    return {
+      downloadDataUrl: `data:${mimeType};base64,${buffer.toString("base64")}`,
+      mimeType,
+      outputSizeBytes: buffer.byteLength,
+      fileCount: files.length,
+    };
   } catch (error) {
     return {
       error:
@@ -230,56 +125,27 @@ export default function CropImagePage() {
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [selectedMethod, setSelectedMethod] = useState("auto");
-  const [croppedResults, setCroppedResults] = useState([]);
-  const [batchOutputUrl, setBatchOutputUrl] = useState("");
+  const [batchResult, setBatchResult] = useState(null);
 
   const isPosting =
     ["loading", "submitting"].includes(fetcher.state) &&
     fetcher.formMethod === "POST";
 
   useEffect(() => {
-    if (fetcher.data?.results?.length) {
-      shopify.toast.show(`Cropped ${fetcher.data.results.length} image(s) successfully`);
+    if (fetcher.data?.downloadDataUrl) {
+      setBatchResult({
+        downloadDataUrl: fetcher.data.downloadDataUrl,
+        mimeType: fetcher.data.mimeType,
+        outputSizeBytes: fetcher.data.outputSizeBytes,
+        fileCount: fetcher.data.fileCount,
+      });
+      shopify.toast.show(`Cropped ${fetcher.data.fileCount} image(s) successfully`);
     }
 
     if (fetcher.data?.error) {
       shopify.toast.show(fetcher.data.error, { isError: true });
     }
   }, [fetcher.data, shopify]);
-
-  useEffect(() => {
-    if (fetcher.data?.results) {
-      setCroppedResults(fetcher.data.results);
-    }
-  }, [fetcher.data?.results]);
-
-  useEffect(() => {
-    return () => {
-      if (batchOutputUrl) {
-        URL.revokeObjectURL(batchOutputUrl);
-      }
-    };
-  }, [batchOutputUrl]);
-
-  useEffect(() => {
-    if (!croppedResults.length) {
-      setBatchOutputUrl((previousBatchOutputUrl) => {
-        if (previousBatchOutputUrl) {
-          URL.revokeObjectURL(previousBatchOutputUrl);
-        }
-        return "";
-      });
-      return;
-    }
-
-    const nextBatchUrl = URL.createObjectURL(buildZipArchive(croppedResults));
-    setBatchOutputUrl((previousBatchOutputUrl) => {
-      if (previousBatchOutputUrl) {
-        URL.revokeObjectURL(previousBatchOutputUrl);
-      }
-      return nextBatchUrl;
-    });
-  }, [croppedResults]);
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -335,11 +201,7 @@ export default function CropImagePage() {
                   .find(Boolean);
 
                 setFileError(nextError || "");
-                setCroppedResults([]);
-                if (batchOutputUrl) {
-                  URL.revokeObjectURL(batchOutputUrl);
-                  setBatchOutputUrl("");
-                }
+                setBatchResult(null);
 
                 setSelectedFiles(
                   nextError
@@ -426,24 +288,24 @@ export default function CropImagePage() {
           <s-banner tone="critical">{fetcher.data.error}</s-banner>
         )}
 
-        {croppedResults.length > 0 && (
+        {batchResult && (
           <s-stack direction="block" gap="base">
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
-                  <th align="left">Output file</th>
-                  <th align="left">Type</th>
+                  <th align="left">Output format</th>
+                  <th align="left">MIME type</th>
                   <th align="right">Size (KB)</th>
+                  <th align="right">Source files</th>
                 </tr>
               </thead>
               <tbody>
-                {croppedResults.map((result) => (
-                  <tr key={result.name}>
-                    <td>{result.name}</td>
-                    <td>{result.mimeType}</td>
-                    <td align="right">{(result.outputSizeBytes / 1024).toFixed(1)}</td>
-                  </tr>
-                ))}
+                <tr>
+                  <td>ZIP archive</td>
+                  <td>{batchResult.mimeType}</td>
+                  <td align="right">{(batchResult.outputSizeBytes / 1024).toFixed(1)}</td>
+                  <td align="right">{batchResult.fileCount}</td>
+                </tr>
               </tbody>
             </table>
 
@@ -452,20 +314,16 @@ export default function CropImagePage() {
                 variant="secondary"
                 onClick={() => {
                   setSelectedFiles([]);
-                  setCroppedResults([]);
+                  setBatchResult(null);
                   setFileError("");
                   setSelectedMethod("auto");
-                  if (batchOutputUrl) {
-                    URL.revokeObjectURL(batchOutputUrl);
-                  }
-                  setBatchOutputUrl("");
                   inputRef.current?.form?.reset();
                   inputRef.current?.focus();
                 }}
               >
                 Re-crop
               </s-button>
-              {batchOutputUrl && <a href={batchOutputUrl} download="cropped-images.zip">Download ZIP</a>}
+              <a href={batchResult.downloadDataUrl} download="cropped-images.zip">Download ZIP</a>
             </s-stack>
           </s-stack>
         )}
