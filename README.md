@@ -104,6 +104,7 @@ At minimum for local/prod you need:
 - `SHOPIFY_APP_URL`
 - `SCOPES`
 - `SMARTCROP_API_URL` (URL of the deployed Smart Crop FastAPI service)
+- `SMARTCROP_FRONTEND_ORIGINS` on the FastAPI service (comma-separated allowed frontend origins, for example `https://your-admin-app.onrender.com,http://localhost:3000`; do not rely on `*` in production)
 
 ### 2) Initialize the database schema
 
