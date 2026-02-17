@@ -34,7 +34,7 @@ export async function cropImages(files, options = {}) {
 
   if (options.method) form.append("method", String(options.method));
 
-  const res = await fetch(`${API_BASE}/crop`, {
+  const res = await fetch(`${API_BASE}/crop/batch`, {
     method: "POST",
     body: form,
   });
