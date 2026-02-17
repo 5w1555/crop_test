@@ -44,6 +44,39 @@ test("cropImage throws the API body text when request fails", async () => {
   await assert.rejects(() => cropImage(file), /bad input/);
 });
 
+test("cropImages posts repeated files form data to the crop endpoint", async () => {
+  const { cropImages } = await loadClient("https://crop.example");
+
+  let requestedUrl;
+  let requestedOptions;
+  global.fetch = async (url, options) => {
+    requestedUrl = url;
+    requestedOptions = options;
+
+    return new Response("ok", {
+      status: 200,
+      headers: { "content-type": "application/zip" },
+    });
+  };
+
+  const files = [
+    new File(["a"], "avatar-1.png", { type: "image/png" }),
+    new File(["b"], "avatar-2.png", { type: "image/png" }),
+  ];
+
+  const response = await cropImages(files, { method: "auto" });
+
+  assert.equal(requestedUrl, "https://crop.example/crop");
+  assert.equal(requestedOptions.method, "POST");
+  assert.ok(requestedOptions.body instanceof FormData);
+  assert.equal(requestedOptions.body.get("method"), "auto");
+  const postedFiles = requestedOptions.body.getAll("files");
+  assert.equal(postedFiles.length, 2);
+  assert.equal(postedFiles[0].name, "avatar-1.png");
+  assert.equal(postedFiles[1].name, "avatar-2.png");
+  assert.equal(response.status, 200);
+});
+
 test("health returns true for ok responses and false when fetch fails", async () => {
   const { health } = await loadClient("https://crop.example");
 
