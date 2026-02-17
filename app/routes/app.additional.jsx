@@ -6,7 +6,6 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { cropImages, health } from "../utils/smartCropClient";
 
-const MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024;
 const CROP_METHODS = [
   {
     value: "auto",
@@ -56,10 +55,6 @@ function validateImageFile(file) {
 
   if (!file.type.startsWith("image/")) {
     return "Only image files are supported.";
-  }
-
-  if (file.size > MAX_FILE_SIZE_BYTES) {
-    return "File must be 10MB or smaller.";
   }
 
   return null;
@@ -122,8 +117,10 @@ export default function CropImagePage() {
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
+  const previewUrlRef = useRef("");
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [previewFile, setPreviewFile] = useState(null);
   const [selectedMethod, setSelectedMethod] = useState("auto");
   const [batchResult, setBatchResult] = useState(null);
   const [isDragActive, setIsDragActive] = useState(false);
@@ -163,6 +160,34 @@ export default function CropImagePage() {
     return "Cropping…";
   }, [fetcher.state, isPosting]);
 
+  useEffect(() => {
+    return () => {
+      if (previewUrlRef.current) {
+        URL.revokeObjectURL(previewUrlRef.current);
+      }
+    };
+  }, []);
+
+  const syncPreviewFile = (nextFiles) => {
+    if (previewUrlRef.current) {
+      URL.revokeObjectURL(previewUrlRef.current);
+      previewUrlRef.current = "";
+    }
+
+    const firstFile = nextFiles[0];
+    if (!firstFile) {
+      setPreviewFile(null);
+      return;
+    }
+
+    const previewUrl = URL.createObjectURL(firstFile);
+    previewUrlRef.current = previewUrl;
+    setPreviewFile({
+      name: firstFile.name,
+      src: previewUrl,
+    });
+  };
+
 
   const syncSelectedFiles = (nextFiles) => {
     const nextError = nextFiles
@@ -174,6 +199,7 @@ export default function CropImagePage() {
 
     setFileError(nextError || "");
     setBatchResult(null);
+    syncPreviewFile(nextError ? [] : nextFiles);
     setSelectedFiles(
       nextError
         ? []
@@ -318,6 +344,18 @@ export default function CropImagePage() {
             </tbody>
           </table>
         )}
+
+        {previewFile && (
+          <s-stack direction="block" gap="small">
+            <s-text fontWeight="semibold">Preview (first image only)</s-text>
+            <s-text tone="subdued">{previewFile.name}</s-text>
+            <img
+              src={previewFile.src}
+              alt={`Preview for ${previewFile.name}`}
+              style={{ maxWidth: "320px", height: "auto", borderRadius: "8px" }}
+            />
+          </s-stack>
+        )}
       </s-section>
 
       <s-section heading="3) Cropped output">
@@ -353,6 +391,7 @@ export default function CropImagePage() {
                 variant="secondary"
                 onClick={() => {
                   setSelectedFiles([]);
+                  syncPreviewFile([]);
                   setBatchResult(null);
                   setFileError("");
                   setSelectedMethod("auto");
