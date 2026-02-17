@@ -9,7 +9,7 @@ services:
     name: smart-crop-app
     runtime: node
     plan: free
-    region: oregon
+    region: frankfurt
     rootDir: .
     buildCommand: npm ci && npm run build
     startCommand: npm run setup && npm run start
