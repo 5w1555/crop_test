@@ -7,9 +7,7 @@ import numpy as np
 from PIL import Image, ImageCms, ImageOps, ImageFilter, ImageEnhance, ImageDraw
 
 import piexif
-import torch
-import torchvision.ops as ops
-from retinaface.pre_trained_models import get_model
+from insightface.app import FaceAnalysis
 
 # Optional RAW support
 try:
@@ -18,55 +16,22 @@ except ImportError:
     rawpy = None
 
 # ----------------------------
-# Monkey-Patch NMS for CUDA fallback
+# Face Detection Model (InsightFace)
 # ----------------------------
-_original_nms = ops.nms
-
-
-def nms_cpu_fallback(boxes, scores, iou_threshold):
-    boxes_cpu = boxes.cpu()
-    scores_cpu = scores.cpu()
-    keep = _original_nms(boxes_cpu, scores_cpu, iou_threshold)
-    return keep.to(boxes.device)
-
-
-ops.nms = nms_cpu_fallback
-# ----------------------------
-# Device Setup (GPU/CPU)
-# ----------------------------
-device = torch.device("cpu")  # Force CPU to avoid CUDA NMS issues
-print("Using CPU for model initialization to avoid CUDA NMS errors.")
-
-# ----------------------------
-# Face Detection Model
-# ----------------------------
-def get_retina_model(device=torch.device("cpu")):
+def get_insightface_model():
     """
-    Load RetinaFace model, preferring local weights for offline execution.
+    Load InsightFace FaceAnalysis model for face detection + 5-point landmarks.
     """
-    weights_path = os.path.join(os.path.dirname(__file__), "retinaface_resnet50.pt")
+    providers = ["CPUExecutionProvider"]
+    print("Using CPU provider for InsightFace model initialization.")
 
-    # Build the wrapper model
-    model = get_model("resnet50_2020-07-20", max_size=2048, device=device)
-    model.eval()
-
-    # Load pre-saved local weights if available
-    if os.path.exists(weights_path):
-        print(f"Loading local RetinaFace weights from: {weights_path}")
-        try:
-            state = torch.load(weights_path, map_location=device)
-            model.model.load_state_dict(state)
-            print("✅ RetinaFace weights loaded successfully.")
-        except Exception as e:
-            print(f"⚠️  Failed to load local weights ({e}). Will use default pretrained download.")
-    else:
-        print("⚠️  Local RetinaFace weights not found. Downloading from internet…")
-
-    return model
+    app = FaceAnalysis(name="buffalo_l", providers=providers)
+    app.prepare(ctx_id=-1, det_size=(1280, 1280), det_thresh=0.2)
+    return app
 
 
 # Instantiate it once for the app
-model = get_retina_model(device)
+model = get_insightface_model()
 
 def heic_available():
     """
@@ -457,47 +422,6 @@ def correct_rotation_roi_transparent(pil_img, landmarks, box):
 
     return rotated, updated_landmarks
 
-
-
-def simple_nms(boxes, scores, iou_threshold=0.5):
-    """
-    Simple CPU-based NMS implementation as a fallback.
-    Args:
-        boxes (torch.Tensor): Bounding boxes [x1, y1, x2, y2] (N, 4).
-        scores (torch.Tensor): Confidence scores (N,).
-        iou_threshold (float): IoU threshold for suppression.
-    Returns:
-        torch.Tensor: Indices of kept boxes.
-    Why: Provides a robust fallback if torchvision.ops.nms fails.
-    """
-    if len(boxes) == 0:
-        return torch.tensor([], dtype=torch.long)
-
-    boxes = boxes.cpu().numpy()
-    scores = scores.cpu().numpy()
-    keep = []
-
-    order = scores.argsort()[::-1]
-    x1, y1, x2, y2 = boxes[:, 0], boxes[:, 1], boxes[:, 2], boxes[:, 3]
-    areas = (x2 - x1 + 1) * (y2 - y1 + 1)
-
-    while order.size > 0:
-        i = order[0]
-        keep.append(i)
-        xx1 = np.maximum(x1[i], x1[order[1:]])
-        yy1 = np.maximum(y1[i], y1[order[1:]])
-        xx2 = np.minimum(x2[i], x2[order[1:]])
-        yy2 = np.minimum(y2[i], y2[order[1:]])
-
-        w = np.maximum(0, xx2 - xx1 + 1)
-        h = np.maximum(0, yy2 - yy1 + 1)
-        iou = (w * h) / (areas[i] + areas[order[1:]] - w * h + 1e-10)
-
-        mask = iou <= iou_threshold
-        order = order[1:][mask]
-    
-    return torch.tensor(keep, dtype=torch.long)
-
 def get_face_and_landmarks(
     input_path,
     conf_threshold=0.3,
@@ -506,18 +430,16 @@ def get_face_and_landmarks(
     model=None,  # ✅ NEW: allow external model injection
 ):
     """
-    Detect face and landmarks using RetinaFace, with fallback NMS and robust validation.
+    Detect face and landmarks using InsightFace FaceAnalysis.
 
     Returns:
         tuple: (box, landmarks, cv_img, pil_img, metadata)
                If detection fails, `box` is None.
     """
     # ✅ Choose model: use shared one if provided, else fallback to global
-    rf_model = model if model is not None else globals().get("model")
-    if rf_model is None:
-        from retinaface.pre_trained_models import get_model
-        rf_model = get_model("resnet50_2020-07-20", max_size=2048, device=device)
-        rf_model.eval()
+    face_model = model if model is not None else globals().get("model")
+    if face_model is None:
+        face_model = get_insightface_model()
 
     # Step 1: Load and validate image
     cv_img, pil_img, metadata = read_image(input_path, sharpen=sharpen)
@@ -532,57 +454,44 @@ def get_face_and_landmarks(
 
     # Step 2: Run detection (with fallback attempts)
     try:
-        with torch.no_grad():
-            original_nms = ops.nms
-            ops.nms = nms_cpu_fallback
-            annotations = rf_model.predict_jsons(
-                cv_img,
-                confidence_threshold=conf_threshold,
-                nms_threshold=0.4
-            )
-            ops.nms = original_nms
+        annotations = face_model.get(cv_img)
     except Exception as e:
         print(f"[Warning] Detection failed: {e}")
         print("Trying fallback with relaxed thresholds...")
 
         try:
-            with torch.no_grad():
-                ops.nms = nms_cpu_fallback
-                annotations = rf_model.predict_jsons(
-                    cv_img,
-                    confidence_threshold=0.1,
-                    nms_threshold=0.6
-                )
-                ops.nms = original_nms
+            annotations = face_model.get(enhance_lighting_for_faces(cv_img))
         except Exception as e2:
             print(f"[Error] Fallback detection failed: {e2}")
             return None, None, cv_img, pil_img, metadata
 
     # Step 3: Validate detections
-    valid = [d for d in annotations if d.get("score", 0) >= conf_threshold]
+    valid = [d for d in annotations if float(getattr(d, "det_score", 0.0)) >= conf_threshold]
     if not valid:
         print(f"[Info] No face detected in: {input_path}")
         return None, None, cv_img, pil_img, metadata
 
-    best = max(valid, key=lambda d: d["score"])
-    box = best.get("bbox")
+    best = max(valid, key=lambda d: float(getattr(d, "det_score", 0.0)))
+    box = getattr(best, "bbox", None)
 
-    if not box or len(box) < 4:
+    if box is None or len(box) < 4:
         print(f"[Error] Invalid bounding box in: {input_path}")
         return None, None, cv_img, pil_img, metadata
+    box = [float(v) for v in box[:4]]
 
     # Step 4: Extract and validate landmarks
-    raw_landmarks = best.get("landmarks", [])
-    if len(raw_landmarks) < 5:
+    raw_landmarks = getattr(best, "kps", None)
+    if raw_landmarks is None or len(raw_landmarks) < 5:
         print(f"[Error] Incomplete landmarks in: {input_path}")
         return None, None, cv_img, pil_img, metadata
 
+    raw_landmarks = np.asarray(raw_landmarks, dtype=np.float32)
     landmarks = {
-        "left_eye": raw_landmarks[0],
-        "right_eye": raw_landmarks[1],
-        "nose": raw_landmarks[2],
-        "mouth_left": raw_landmarks[3],
-        "mouth_right": raw_landmarks[4],
+        "left_eye": tuple(raw_landmarks[0][:2]),
+        "right_eye": tuple(raw_landmarks[1][:2]),
+        "nose": tuple(raw_landmarks[2][:2]),
+        "mouth_left": tuple(raw_landmarks[3][:2]),
+        "mouth_right": tuple(raw_landmarks[4][:2]),
     }
 
     for k, pt in landmarks.items():
@@ -894,7 +803,6 @@ def crop_profile_image(pil_img, box=None, metadata={}, margin=20, neck_offset=50
         print(f"Error during profile crop: {e}")
         return None
 
-# assume get_model has already been called, so `model` is your RetinaFace instance
 
 def head_bust_crop(input_path,
                    margin=40,

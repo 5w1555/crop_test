@@ -3,12 +3,11 @@ uvicorn[standard]
 python-multipart
 pillow
 aiofiles
-torch
-torchvision
-retinaface
 opencv-python
 numpy
 piexif
 pillow-heif
 rawpy
 pydng
+insightface
+onnxruntime
