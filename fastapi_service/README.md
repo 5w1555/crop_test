@@ -10,7 +10,17 @@ python -m venv .venv
 pip install -r requirements.txt
 ```
 
-2. Start the server:
+2. Set CORS origins (recommended in all environments):
+
+```
+# Comma-separated list of allowed browser origins
+# Example for local UI + deployed app
+export SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000,https://your-frontend.example.com"
+```
+
+If this variable is not set, the API defaults to localhost development origins only (`http://localhost:3000` and `http://127.0.0.1:3000`).
+
+3. Start the server:
 
 ```
 uvicorn main:app --host 0.0.0.0 --port 8000
@@ -20,10 +30,12 @@ Docker build:
 
 ```
 docker build -t smart-crop-fastapi .
-docker run -p 8000:8000 -e SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000" smart-crop-fastapi
+docker run -p 8000:8000 -e SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000,https://your-frontend.example.com" smart-crop-fastapi
 ```
 
 The service exposes `/health` and a POST `/crop` endpoint that accepts a file upload.
+
+Note: if you intentionally set `SMARTCROP_FRONTEND_ORIGINS="*"`, the service automatically disables credentialed CORS (`allow_credentials=False`) for browser compatibility and security.
 
 
 ## API

@@ -1552,12 +1552,15 @@ origins_env = os.getenv("SMARTCROP_FRONTEND_ORIGINS")
 if origins_env:
     origins = [o.strip() for o in origins_env.split(",") if o.strip()]
 else:
-    origins = ["*"]
+    origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+# Browsers disallow credentialed CORS when a wildcard origin is used.
+allow_credentials = "*" not in origins
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
-    allow_credentials=True,
+    allow_credentials=allow_credentials,
     allow_methods=["*"],
     allow_headers=["*"],
 )
