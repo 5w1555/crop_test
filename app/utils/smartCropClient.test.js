@@ -44,7 +44,7 @@ test("cropImage throws the API body text when request fails", async () => {
   await assert.rejects(() => cropImage(file), /bad input/);
 });
 
-test("cropImages posts repeated files form data to the crop endpoint", async () => {
+test("cropImages posts repeated files form data to the batch crop endpoint", async () => {
   const { cropImages } = await loadClient("https://crop.example");
 
   let requestedUrl;
@@ -66,7 +66,7 @@ test("cropImages posts repeated files form data to the crop endpoint", async () 
 
   const response = await cropImages(files, { method: "auto" });
 
-  assert.equal(requestedUrl, "https://crop.example/crop");
+  assert.equal(requestedUrl, "https://crop.example/crop/batch");
   assert.equal(requestedOptions.method, "POST");
   assert.ok(requestedOptions.body instanceof FormData);
   assert.equal(requestedOptions.body.get("method"), "auto");
