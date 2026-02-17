@@ -25,6 +25,28 @@ export async function cropImage(file, options = {}) {
   return res;
 }
 
+export async function cropImages(files, options = {}) {
+  const form = new FormData();
+
+  files.forEach((file) => {
+    form.append("files", file, file.name || "upload");
+  });
+
+  if (options.method) form.append("method", String(options.method));
+
+  const res = await fetch(`${API_BASE}/crop`, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(text || `Crop failed: ${res.status}`);
+  }
+
+  return res;
+}
+
 export async function health() {
   try {
     const res = await fetch(`${API_BASE}/health`);
