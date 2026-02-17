@@ -20,13 +20,13 @@ except ImportError:
 # ----------------------------
 def get_insightface_model():
     """
-    Load InsightFace FaceAnalysis model for face detection + 5-point landmarks.
+    Load lightweight InsightFace FaceAnalysis model for face detection + 5-point landmarks.
     """
     providers = ["CPUExecutionProvider"]
     print("Using CPU provider for InsightFace model initialization.")
 
-    app = FaceAnalysis(name="buffalo_l", providers=providers)
-    app.prepare(ctx_id=-1, det_size=(1280, 1280), det_thresh=0.2)
+    app = FaceAnalysis(name="buffalo_sc", providers=providers)
+    app.prepare(ctx_id=-1, det_size=(640, 640), det_thresh=0.2)
     return app
 
 
