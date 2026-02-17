@@ -992,6 +992,41 @@ def auto_crop(pil_img, frontal_margin, profile_margin, box, landmarks, metadata,
     return cropped_image
 
 
+def center_content_crop(
+    pil_img,
+    metadata=None,
+    horizontal_margin_ratio=0.08,
+    top_crop_ratio=0.12,
+    bottom_crop_ratio=0.03,
+    min_margin_px=16,
+):
+    """
+    Fallback crop used when no face is detected.
+
+    This keeps the crop centered while applying a slight top bias so content around
+    the image center remains prioritized.
+    """
+    if pil_img is None:
+        print("Error: No input image provided to center_content_crop.")
+        return None
+
+    metadata = metadata or {}
+    width, height = pil_img.size
+
+    side_margin = max(min_margin_px, int(width * horizontal_margin_ratio))
+    top = max(0, int(height * top_crop_ratio))
+    bottom = min(height, int(height * (1 - bottom_crop_ratio)))
+    left = max(0, side_margin)
+    right = min(width, width - side_margin)
+
+    if right <= left or bottom <= top:
+        print("Warning: center_content_crop produced invalid box; returning original image.")
+        return process_color_profile(pil_img, metadata)
+
+    cropped = pil_img.crop((left, top, right, bottom))
+    return process_color_profile(cropped, metadata)
+
+
 def crop_chin_image(pil_img, margin=20, box=None, metadata={}, chin_offset=20):
     if box is None or len(box) < 4:
         return None
@@ -1298,7 +1333,15 @@ def process_image(
     output_path = os.path.join(output_folder, f"cropped_{filename}")
 
     if box is None or landmarks is None:
-        print(f"{filename}: No face detected. Skipping...")
+        print(f"{filename}: No face detected. Using center/content fallback crop.")
+        cropped_img = center_content_crop(pil_img, metadata=metadata)
+        if cropped_img and aspect_ratio:
+            cropped_img = apply_aspect_ratio_filter(cropped_img, aspect_ratio)
+        if cropped_img:
+            cropped_img = apply_filter(cropped_img, filter_name, filter_intensity)
+            save_image(cropped_img, output_path, metadata)
+            return 1
+        print(f"{filename}: Fallback crop failed. Skipping...")
         return 0
 
     crop_functions = {
@@ -1543,7 +1586,12 @@ async def crop_endpoint(
         )
 
         cropped = None
-        if method == "head_bust":
+        no_face_detected = box is None or landmarks is None
+
+        if no_face_detected:
+            print("No face detected in /crop request. Using center/content fallback crop.")
+            cropped = center_content_crop(pil_img, metadata=metadata)
+        elif method == "head_bust":
             cropped = head_bust_crop(tmp.name)
         elif method == "auto":
             cropped = auto_crop(
