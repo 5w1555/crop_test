@@ -126,6 +126,7 @@ export default function CropImagePage() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [selectedMethod, setSelectedMethod] = useState("auto");
   const [batchResult, setBatchResult] = useState(null);
+  const [isDragActive, setIsDragActive] = useState(false);
 
   const isPosting =
     ["loading", "submitting"].includes(fetcher.state) &&
@@ -162,6 +163,28 @@ export default function CropImagePage() {
     return "Cropping…";
   }, [fetcher.state, isPosting]);
 
+
+  const syncSelectedFiles = (nextFiles) => {
+    const nextError = nextFiles
+      .map((file) => {
+        const error = validateImageFile(file);
+        return error ? `${file.name}: ${error}` : null;
+      })
+      .find(Boolean);
+
+    setFileError(nextError || "");
+    setBatchResult(null);
+    setSelectedFiles(
+      nextError
+        ? []
+        : nextFiles.map((file) => ({
+            name: file.name,
+            mimeType: file.type,
+            sizeBytes: file.size,
+          })),
+    );
+  };
+
   const hasValidSelection = selectedFiles.length > 0 && !fileError;
 
   return (
@@ -182,38 +205,54 @@ export default function CropImagePage() {
 
         <fetcher.Form method="post" encType="multipart/form-data">
           <s-stack direction="block" gap="base">
-            <label htmlFor="file">Image file</label>
-            <input
-              id="file"
-              name="file"
-              ref={inputRef}
-              type="file"
-              multiple
-              accept="image/*"
-              required
-              onChange={(event) => {
-                const nextFiles = Array.from(event.currentTarget.files ?? []);
-                const nextError = nextFiles
-                  .map((file) => {
-                    const error = validateImageFile(file);
-                    return error ? `${file.name}: ${error}` : null;
-                  })
-                  .find(Boolean);
-
-                setFileError(nextError || "");
-                setBatchResult(null);
-
-                setSelectedFiles(
-                  nextError
-                    ? []
-                    : nextFiles.map((file) => ({
-                        name: file.name,
-                        mimeType: file.type,
-                        sizeBytes: file.size,
-                      })),
-                );
+            <label htmlFor="file">Image files</label>
+            <s-box
+              padding="base"
+              border="base"
+              borderRadius="base"
+              background={isDragActive ? "bg-fill-brand" : "bg-fill"}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setIsDragActive(true);
               }}
-            />
+              onDragLeave={(event) => {
+                event.preventDefault();
+                setIsDragActive(false);
+              }}
+              onDrop={(event) => {
+                event.preventDefault();
+                setIsDragActive(false);
+
+                const nextFiles = Array.from(event.dataTransfer.files ?? []);
+                if (!nextFiles.length) return;
+
+                if (inputRef.current) {
+                  const dataTransfer = new DataTransfer();
+                  nextFiles.forEach((file) => dataTransfer.items.add(file));
+                  inputRef.current.files = dataTransfer.files;
+                }
+
+                syncSelectedFiles(nextFiles);
+              }}
+            >
+              <s-stack direction="block" gap="small">
+                <s-text>Drag and drop one or more images here</s-text>
+                <s-text tone="subdued">or use the picker below</s-text>
+                <input
+                  id="file"
+                  name="file"
+                  ref={inputRef}
+                  type="file"
+                  multiple
+                  accept="image/*"
+                  required
+                  onChange={(event) => {
+                    const nextFiles = Array.from(event.currentTarget.files ?? []);
+                    syncSelectedFiles(nextFiles);
+                  }}
+                />
+              </s-stack>
+            </s-box>
             {fileError && <s-text tone="critical">{fileError}</s-text>}
 
             <label htmlFor="method">Crop method</label>
