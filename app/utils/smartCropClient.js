@@ -1,6 +1,10 @@
 import process from "node:process";
 
-const API_BASE = process.env.SMARTCROP_API_URL || "http://localhost:8000";
+const DEFAULT_RENDER_API_URL = "https://smart-crop-api.onrender.com";
+
+const API_BASE =
+  process.env.SMARTCROP_API_URL ||
+  (process.env.RENDER ? DEFAULT_RENDER_API_URL : "http://localhost:8000");
 
 export async function cropImage(file, options = {}) {
   const form = new FormData();

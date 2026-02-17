@@ -33,7 +33,7 @@ services:
       - key: SHOP_CUSTOM_DOMAIN
         sync: false
       - key: SMARTCROP_API_URL
-        sync: false
+        value: https://smart-crop-api.onrender.com
 
   - type: web
     name: smart-crop-api
@@ -45,4 +45,4 @@ services:
     startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: SMARTCROP_FRONTEND_ORIGINS
-        sync: false
+        value: https://smart-crop-app.onrender.com
