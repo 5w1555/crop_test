@@ -1,10 +1,13 @@
 import os
 import io
 import math
+import json
+import zipfile
 import threading
 import queue
 import concurrent.futures
 import multiprocessing
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -1580,60 +1583,154 @@ async def crop_endpoint(
         tmp.write(content)
         tmp.flush()
         tmp.close()
-
-        box, landmarks, cv_img, pil_img, metadata = get_face_and_landmarks(
-            tmp.name, conf_threshold=0.3
-        )
-
-        cropped = None
-        no_face_detected = box is None or landmarks is None
-
-        if no_face_detected:
-            print("No face detected in /crop request. Using center/content fallback crop.")
-            cropped = center_content_crop(pil_img, metadata=metadata)
-        elif method == "head_bust":
-            cropped = head_bust_crop(tmp.name)
-        elif method == "auto":
-            cropped = auto_crop(
-                pil_img,
-                frontal_margin=20,
-                profile_margin=20,
-                box=box,
-                landmarks=landmarks,
-                metadata=metadata,
-            )
-        elif method == "frontal":
-            cropped = crop_frontal_image(pil_img, landmarks=landmarks, metadata=metadata)
-        elif method == "profile":
-            cropped = crop_profile_image(pil_img, box=box, metadata=metadata)
-        elif method == "chin":
-            cropped = crop_chin_image(pil_img, box=box, metadata=metadata)
-        elif method == "nose":
-            cropped = crop_nose_image(pil_img, box=box, landmarks=landmarks, metadata=metadata)
-        elif method == "below_lips":
-            cropped = crop_below_lips_image(pil_img, landmarks=landmarks, metadata=metadata)
-        else:
-            raise HTTPException(status_code=400, detail="Unknown method")
-
-        if cropped is None:
-            raise HTTPException(status_code=500, detail="Cropping failed")
-
-        buf = io.BytesIO()
-
-        save_kwargs = {}
-        if getattr(cropped, "info", None) and "icc_profile" in cropped.info:
-            save_kwargs["icc_profile"] = cropped.info.get("icc_profile")
-
-        cropped.save(buf, format="PNG", **save_kwargs)
-
-        buf.seek(0)
+        cropped = run_crop_pipeline(tmp.name, method)
+        buf = image_to_png_buffer(cropped)
         return StreamingResponse(buf, media_type="image/png")
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
     finally:
         try:
             os.unlink(tmp.name)
         except Exception:
             pass
+
+
+def run_crop_pipeline(
+    temp_path: str,
+    method: str,
+):
+    box, landmarks, cv_img, pil_img, metadata = get_face_and_landmarks(
+        temp_path, conf_threshold=0.3
+    )
+
+    cropped = None
+    no_face_detected = box is None or landmarks is None
+
+    if no_face_detected:
+        print("No face detected in request. Using center/content fallback crop.")
+        cropped = center_content_crop(pil_img, metadata=metadata)
+    elif method == "head_bust":
+        cropped = head_bust_crop(temp_path)
+    elif method == "auto":
+        cropped = auto_crop(
+            pil_img,
+            frontal_margin=20,
+            profile_margin=20,
+            box=box,
+            landmarks=landmarks,
+            metadata=metadata,
+        )
+    elif method == "frontal":
+        cropped = crop_frontal_image(pil_img, landmarks=landmarks, metadata=metadata)
+    elif method == "profile":
+        cropped = crop_profile_image(pil_img, box=box, metadata=metadata)
+    elif method == "chin":
+        cropped = crop_chin_image(pil_img, box=box, metadata=metadata)
+    elif method == "nose":
+        cropped = crop_nose_image(pil_img, box=box, landmarks=landmarks, metadata=metadata)
+    elif method == "below_lips":
+        cropped = crop_below_lips_image(pil_img, landmarks=landmarks, metadata=metadata)
+    else:
+        raise HTTPException(status_code=400, detail="Unknown method")
+
+    if cropped is None:
+        raise RuntimeError("Cropping failed")
+
+    return cropped
+
+
+def image_to_png_buffer(image):
+    image_buf = io.BytesIO()
+    save_kwargs = {}
+    if getattr(image, "info", None) and "icc_profile" in image.info:
+        save_kwargs["icc_profile"] = image.info.get("icc_profile")
+    image.save(image_buf, format="PNG", **save_kwargs)
+    image_buf.seek(0)
+    return image_buf
+
+
+@app.post("/crop/batch")
+async def crop_batch_endpoint(
+    files: list[UploadFile] = File(...),
+    method: str = Form("auto"),
+):
+    """
+    Upload multiple images and return a ZIP containing cropped PNG outputs.
+    Invalid files are skipped and recorded in manifest.json inside the ZIP.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    zip_buffer = io.BytesIO()
+    manifest = {"method": method, "processed": [], "failed": []}
+    used_output_names = {}
+
+    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        for index, uploaded_file in enumerate(files, start=1):
+            suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
+            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+            input_name = uploaded_file.filename or f"image_{index}{suffix}"
+
+            try:
+                content = await uploaded_file.read()
+                if not content:
+                    raise ValueError("Uploaded file is empty")
+
+                tmp.write(content)
+                tmp.flush()
+                tmp.close()
+
+                cropped = run_crop_pipeline(tmp.name, method)
+
+                output_stem = Path(input_name).stem or f"image_{index}"
+                base_output_name = f"{output_stem}_cropped"
+                name_count = used_output_names.get(base_output_name, 0)
+                used_output_names[base_output_name] = name_count + 1
+                suffix_name = f"_{name_count}" if name_count else ""
+                output_filename = f"{base_output_name}{suffix_name}.png"
+
+                zip_file.writestr(output_filename, image_to_png_buffer(cropped).getvalue())
+                manifest["processed"].append(
+                    {
+                        "input": input_name,
+                        "output": output_filename,
+                    }
+                )
+            except HTTPException as exc:
+                manifest["failed"].append(
+                    {
+                        "input": input_name,
+                        "error": str(exc.detail),
+                    }
+                )
+            except Exception as exc:
+                manifest["failed"].append(
+                    {
+                        "input": input_name,
+                        "error": str(exc),
+                    }
+                )
+            finally:
+                try:
+                    os.unlink(tmp.name)
+                except Exception:
+                    pass
+
+        zip_file.writestr("manifest.json", json.dumps(manifest, indent=2))
+
+    if not manifest["processed"]:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "No files were successfully cropped",
+                "failed": manifest["failed"],
+            },
+        )
+
+    zip_buffer.seek(0)
+    headers = {"Content-Disposition": 'attachment; filename="cropped_batch.zip"'}
+    return StreamingResponse(zip_buffer, media_type="application/zip", headers=headers)
 
 
 if __name__ == "__main__":
