@@ -300,6 +300,12 @@ def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
             pil_img = Image.frombytes(
                 heif_file.mode, heif_file.size, heif_file.data, "raw"
             )
+            scale = min(max_dim / pil_img.width, max_dim / pil_img.height, 1)
+            if scale < 1:
+                new_size = (int(pil_img.width * scale), int(pil_img.height * scale))
+                pil_img = pil_img.resize(new_size, Image.LANCZOS)
+                if sharpen:
+                    pil_img = pil_img.filter(ImageFilter.SHARPEN)
             metadata = {}
             try:
                 if hasattr(heif_file, "color_profile"):
@@ -315,6 +321,7 @@ def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
                 print(f"Color profile extraction warning: {e}")
             if hasattr(heif_file, "metadata"):
                 metadata.update(heif_file.metadata)
+            pil_img = pil_img.convert("RGB")
             cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
 
             # Apply lighting enhancement if requested
