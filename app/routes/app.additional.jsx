@@ -1,6 +1,5 @@
-import { Buffer } from "node:buffer";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useFetcher, useLoaderData, useRouteError } from "react-router";
+import { useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -86,6 +85,9 @@ export const action = async ({ request }) => {
   try {
     const response = await cropImages(files, { method });
     const mimeType = response.headers.get("content-type") || "application/octet-stream";
+    const contentDisposition =
+      response.headers.get("content-disposition") ||
+      'attachment; filename="cropped-images.zip"';
 
     if (!mimeType.includes("application/zip")) {
       return {
@@ -93,14 +95,13 @@ export const action = async ({ request }) => {
       };
     }
 
-    const buffer = Buffer.from(await response.arrayBuffer());
-
-    return {
-      downloadDataUrl: `data:${mimeType};base64,${buffer.toString("base64")}`,
-      mimeType,
-      outputSizeBytes: buffer.byteLength,
-      fileCount: files.length,
-    };
+    return new Response(response.body, {
+      status: response.status,
+      headers: {
+        "content-type": mimeType,
+        "content-disposition": contentDisposition,
+      },
+    });
   } catch (error) {
     return {
       error:
@@ -113,7 +114,6 @@ export const action = async ({ request }) => {
 
 export default function CropImagePage() {
   const { apiHealthy } = useLoaderData();
-  const fetcher = useFetcher();
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
@@ -122,28 +122,8 @@ export default function CropImagePage() {
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
   const [selectedMethod, setSelectedMethod] = useState("auto");
-  const [batchResult, setBatchResult] = useState(null);
   const [isDragActive, setIsDragActive] = useState(false);
-
-  const isPosting =
-    ["loading", "submitting"].includes(fetcher.state) &&
-    fetcher.formMethod === "POST";
-
-  useEffect(() => {
-    if (fetcher.data?.downloadDataUrl) {
-      setBatchResult({
-        downloadDataUrl: fetcher.data.downloadDataUrl,
-        mimeType: fetcher.data.mimeType,
-        outputSizeBytes: fetcher.data.outputSizeBytes,
-        fileCount: fetcher.data.fileCount,
-      });
-      shopify.toast.show(`Cropped ${fetcher.data.fileCount} image(s) successfully`);
-    }
-
-    if (fetcher.data?.error) {
-      shopify.toast.show(fetcher.data.error, { isError: true });
-    }
-  }, [fetcher.data, shopify]);
+  const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -151,14 +131,12 @@ export default function CropImagePage() {
   }, [apiHealthy]);
 
   const loadingText = useMemo(() => {
-    if (!isPosting) return "";
+    if (!isSubmittingDownload) return "";
 
-    if (fetcher.state === "submitting") {
+    if (isSubmittingDownload) {
       return "Uploading…";
     }
-
-    return "Cropping…";
-  }, [fetcher.state, isPosting]);
+  }, [isSubmittingDownload]);
 
   useEffect(() => {
     return () => {
@@ -198,7 +176,6 @@ export default function CropImagePage() {
       .find(Boolean);
 
     setFileError(nextError || "");
-    setBatchResult(null);
     syncPreviewFile(nextError ? [] : nextFiles);
     setSelectedFiles(
       nextError
@@ -229,7 +206,15 @@ export default function CropImagePage() {
           <code> fastapi_service/main.py </code>, and run Smart Crop.
         </s-paragraph>
 
-        <fetcher.Form method="post" encType="multipart/form-data">
+        <form
+          method="post"
+          encType="multipart/form-data"
+          target="crop-download-frame"
+          onSubmit={() => {
+            setIsSubmittingDownload(true);
+            shopify.toast.show("Cropping started. Your ZIP will download automatically.");
+          }}
+        >
           <s-stack direction="block" gap="base">
             <label htmlFor="file">Image files</label>
             <s-box
@@ -311,15 +296,25 @@ export default function CropImagePage() {
 
             <s-button
               type="submit"
-              disabled={!apiHealthy || !hasValidSelection || isPosting}
-              {...(isPosting ? { loading: true } : {})}
+              disabled={!apiHealthy || !hasValidSelection || isSubmittingDownload}
+              {...(isSubmittingDownload ? { loading: true } : {})}
             >
               Crop images
             </s-button>
 
             {loadingText && <s-text>{loadingText}</s-text>}
           </s-stack>
-        </fetcher.Form>
+        </form>
+        <iframe
+          title="crop-download-frame"
+          name="crop-download-frame"
+          style={{ display: "none" }}
+          onLoad={() => {
+            if (!isSubmittingDownload) return;
+            setIsSubmittingDownload(false);
+            shopify.toast.show("Crop complete. Download should begin shortly.");
+          }}
+        />
       </s-section>
 
       <s-section heading="2) Selected images">
@@ -361,50 +356,22 @@ export default function CropImagePage() {
       <s-section heading="3) Cropped output">
         <s-paragraph>Status: {apiStatusText}</s-paragraph>
 
-        {fetcher.data?.error && (
-          <s-banner tone="critical">{fetcher.data.error}</s-banner>
-        )}
-
-        {batchResult && (
-          <s-stack direction="block" gap="base">
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th align="left">Output format</th>
-                  <th align="left">MIME type</th>
-                  <th align="right">Size (KB)</th>
-                  <th align="right">Source files</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr>
-                  <td>ZIP archive</td>
-                  <td>{batchResult.mimeType}</td>
-                  <td align="right">{(batchResult.outputSizeBytes / 1024).toFixed(1)}</td>
-                  <td align="right">{batchResult.fileCount}</td>
-                </tr>
-              </tbody>
-            </table>
-
-            <s-stack direction="inline" gap="base">
-              <s-button
-                variant="secondary"
-                onClick={() => {
-                  setSelectedFiles([]);
-                  syncPreviewFile([]);
-                  setBatchResult(null);
-                  setFileError("");
-                  setSelectedMethod("auto");
-                  inputRef.current?.form?.reset();
-                  inputRef.current?.focus();
-                }}
-              >
-                Re-crop
-              </s-button>
-              <a href={batchResult.downloadDataUrl} download="cropped-images.zip">Download ZIP</a>
-            </s-stack>
-          </s-stack>
-        )}
+        <s-stack direction="inline" gap="base">
+          <s-button
+            variant="secondary"
+            onClick={() => {
+              setSelectedFiles([]);
+              syncPreviewFile([]);
+              setFileError("");
+              setSelectedMethod("auto");
+              inputRef.current?.form?.reset();
+              inputRef.current?.focus();
+            }}
+          >
+            Reset selection
+          </s-button>
+          <s-text tone="subdued">Downloads are streamed directly from the server response.</s-text>
+        </s-stack>
       </s-section>
     </s-page>
   );
