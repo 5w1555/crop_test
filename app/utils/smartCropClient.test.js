@@ -4,9 +4,46 @@ import assert from "node:assert/strict";
 const moduleUrl = new URL("./smartCropClient.js", import.meta.url).href;
 
 async function loadClient(apiUrl) {
-  process.env.SMARTCROP_API_URL = apiUrl;
+  if (apiUrl === undefined) {
+    delete process.env.SMARTCROP_API_URL;
+  } else {
+    process.env.SMARTCROP_API_URL = apiUrl;
+  }
   return import(`${moduleUrl}?t=${Date.now()}-${Math.random()}`);
 }
+
+test("cropImage trims trailing slash from SMARTCROP_API_URL", async () => {
+  const { cropImage } = await loadClient("https://crop.example/");
+
+  let requestedUrl;
+  global.fetch = async (url) => {
+    requestedUrl = url;
+    return new Response("ok", { status: 200 });
+  };
+
+  const file = new File(["image-bytes"], "avatar.png", { type: "image/png" });
+  await cropImage(file);
+
+  assert.equal(requestedUrl, "https://crop.example/crop");
+});
+
+test("health uses Render fallback API URL when SMARTCROP_API_URL is not set", async () => {
+  delete process.env.SMARTCROP_API_URL;
+  process.env.RENDER = "true";
+
+  const { health } = await loadClient();
+
+  let requestedUrl;
+  global.fetch = async (url) => {
+    requestedUrl = url;
+    return new Response(null, { status: 200 });
+  };
+
+  assert.equal(await health(), true);
+  assert.equal(requestedUrl, "https://smart-crop-api-f97p.onrender.com/health");
+
+  delete process.env.RENDER;
+});
 
 test("cropImage posts form data to the crop endpoint", async () => {
   const { cropImage } = await loadClient("https://crop.example");
