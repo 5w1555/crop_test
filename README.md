@@ -105,6 +105,11 @@ At minimum for local/prod you need:
 - `SCOPES`
 - `SMARTCROP_API_URL` (URL of the deployed Smart Crop FastAPI service)
 - `SMARTCROP_FRONTEND_ORIGINS` on the FastAPI service (comma-separated allowed frontend origins, for example `https://your-admin-app.onrender.com,http://localhost:3000`; do not rely on `*` in production)
+- `SMARTCROP_MAX_UPLOAD_MB` on FastAPI (max upload size per file, default `12` on Render)
+- `SMARTCROP_MAX_BATCH_FILES` on FastAPI (max number of files accepted by `/crop/batch`, default `8`)
+- `SMARTCROP_MAX_CONCURRENCY` on FastAPI (request slots for heavy crop processing; use `1` on small instances to avoid memory spikes)
+- `SMARTCROP_ACQUIRE_TIMEOUT_SECONDS` on FastAPI (how long requests wait for a processing slot before returning `503`)
+- `SMARTCROP_PRELOAD_MODEL` on FastAPI (`1`/`0`; preloads InsightFace in a background startup thread to reduce first-request cold-start)
 
 ### 2) Initialize the database schema
 
@@ -147,7 +152,7 @@ npm run setup && npm run start
 
 This guarantees migrations are applied before serving traffic.
 
-> `SMARTCROP_API_URL` is required for Smart Crop and must point to your deployed FastAPI endpoint (prefer Render internal URL when both services are in the same Render workspace; otherwise use the external URL such as `https://smart-crop-api.onrender.com`).
+> `SMARTCROP_API_URL` is required for Smart Crop and must point to your deployed FastAPI endpoint (prefer Render internal URL when both services are in the same Render workspace; otherwise use the external URL such as `https://smart-crop-api-f97p.onrender.com`).
 
 ## What to configure in the `.toml` files
 
