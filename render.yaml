@@ -27,7 +27,7 @@ services:
       - key: SHOP_CUSTOM_DOMAIN
         sync: false
       - key: SMARTCROP_API_URL
-        value: https://smart-crop-api.onrender.com
+        value: https://smart-crop-api-f97p.onrender.com
 
   - type: web
     name: smart-crop-api
@@ -40,3 +40,13 @@ services:
     envVars:
       - key: SMARTCROP_FRONTEND_ORIGINS
         value: https://smart-crop-app.onrender.com
+      - key: SMARTCROP_MAX_UPLOAD_MB
+        value: "12"
+      - key: SMARTCROP_MAX_BATCH_FILES
+        value: "8"
+      - key: SMARTCROP_MAX_CONCURRENCY
+        value: "1"
+      - key: SMARTCROP_ACQUIRE_TIMEOUT_SECONDS
+        value: "20"
+      - key: SMARTCROP_PRELOAD_MODEL
+        value: "1"
