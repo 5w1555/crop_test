@@ -1,10 +1,12 @@
 import process from "node:process";
 
-const DEFAULT_RENDER_API_URL = "https://smart-crop-api.onrender.com";
+const DEFAULT_RENDER_API_URL = "https://smart-crop-api-f97p.onrender.com";
 
 const API_BASE =
   process.env.SMARTCROP_API_URL ||
   (process.env.RENDER ? DEFAULT_RENDER_API_URL : "http://localhost:8000");
+
+const NORMALIZED_API_BASE = API_BASE.replace(/\/+$/, "");
 
 export async function cropImage(file, options = {}) {
   const form = new FormData();
@@ -12,7 +14,7 @@ export async function cropImage(file, options = {}) {
 
   if (options.method) form.append("method", String(options.method));
 
-  const res = await fetch(`${API_BASE}/crop`, {
+  const res = await fetch(`${NORMALIZED_API_BASE}/crop`, {
     method: "POST",
     body: form,
   });
@@ -34,7 +36,7 @@ export async function cropImages(files, options = {}) {
 
   if (options.method) form.append("method", String(options.method));
 
-  const res = await fetch(`${API_BASE}/crop/batch`, {
+  const res = await fetch(`${NORMALIZED_API_BASE}/crop/batch`, {
     method: "POST",
     body: form,
   });
@@ -49,7 +51,7 @@ export async function cropImages(files, options = {}) {
 
 export async function health() {
   try {
-    const res = await fetch(`${API_BASE}/health`);
+    const res = await fetch(`${NORMALIZED_API_BASE}/health`);
     return res.ok;
   } catch {
     return false;

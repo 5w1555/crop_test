@@ -1,6 +1,7 @@
 import os
 import io
 import math
+import asyncio
 import json
 import zipfile
 import mimetypes
@@ -9,6 +10,7 @@ import queue
 import concurrent.futures
 import multiprocessing
 from pathlib import Path
+from contextlib import asynccontextmanager
 
 import cv2
 import numpy as np
@@ -1563,6 +1565,54 @@ import tempfile
 
 app = FastAPI(title="smart-crop API")
 
+MAX_UPLOAD_MB = int(os.getenv("SMARTCROP_MAX_UPLOAD_MB", "12" if os.getenv("RENDER") else "25"))
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+MAX_BATCH_FILES = int(os.getenv("SMARTCROP_MAX_BATCH_FILES", "8"))
+CROP_CONCURRENCY = max(1, int(os.getenv("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv("RENDER") else "2")))
+SLOT_ACQUIRE_TIMEOUT_SECONDS = float(os.getenv("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20"))
+PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true", "yes", "on"}
+
+_crop_request_semaphore = asyncio.Semaphore(CROP_CONCURRENCY)
+
+
+def _validate_upload_size(content: bytes, file_label: str):
+    if len(content) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"{file_label} exceeds max upload size ({MAX_UPLOAD_MB} MB)",
+        )
+
+
+def _preload_model_worker():
+    try:
+        get_insightface_model()
+        print("InsightFace model preloaded.")
+    except Exception as exc:
+        print(f"InsightFace preload failed: {exc}")
+
+
+@app.on_event("startup")
+async def startup_event():
+    if PRELOAD_MODEL:
+        threading.Thread(target=_preload_model_worker, daemon=True).start()
+
+
+@asynccontextmanager
+async def crop_request_slot():
+    try:
+        await asyncio.wait_for(_crop_request_semaphore.acquire(), timeout=SLOT_ACQUIRE_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail="Smart Crop API is busy. Please retry shortly.",
+        ) from exc
+
+    try:
+        yield
+    finally:
+        _crop_request_semaphore.release()
+
+
 # Configure CORS origins via environment variable SMARTCROP_FRONTEND_ORIGINS
 origins_env = os.getenv("SMARTCROP_FRONTEND_ORIGINS")
 if origins_env:
@@ -1600,16 +1650,19 @@ async def crop_endpoint(
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     try:
         content = await file.read()
-        tmp.write(content)
-        tmp.flush()
-        tmp.close()
-        cropped = run_crop_pipeline(tmp.name, method)
-        output_info = resolve_output_format(file.filename, file.content_type)
-        buf = image_to_buffer(cropped, output_info['pil_format'])
-        headers = {
-            "Content-Disposition": f'attachment; filename="{Path(file.filename or "cropped").stem}_cropped.{output_info["extension"]}"'
-        }
-        return StreamingResponse(buf, media_type=output_info['media_type'], headers=headers)
+        _validate_upload_size(content, file.filename or "upload")
+
+        async with crop_request_slot():
+            tmp.write(content)
+            tmp.flush()
+            tmp.close()
+            cropped = run_crop_pipeline(tmp.name, method)
+            output_info = resolve_output_format(file.filename, file.content_type)
+            buf = image_to_buffer(cropped, output_info['pil_format'])
+            headers = {
+                "Content-Disposition": f'attachment; filename="{Path(file.filename or "cropped").stem}_cropped.{output_info["extension"]}"'
+            }
+            return StreamingResponse(buf, media_type=output_info['media_type'], headers=headers)
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1740,6 +1793,12 @@ async def crop_batch_endpoint(
     if not uploaded_files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
+    if len(uploaded_files) > MAX_BATCH_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many files. Max {MAX_BATCH_FILES} files per batch request.",
+        )
+
     zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
     zip_tmp_path = zip_tmp.name
     zip_tmp.close()
@@ -1757,12 +1816,14 @@ async def crop_batch_endpoint(
                     content = await uploaded_file.read()
                     if not content:
                         raise ValueError("Uploaded file is empty")
+                    _validate_upload_size(content, input_name)
 
-                    tmp.write(content)
-                    tmp.flush()
-                    tmp.close()
+                    async with crop_request_slot():
+                        tmp.write(content)
+                        tmp.flush()
+                        tmp.close()
 
-                    cropped = run_crop_pipeline(tmp.name, method)
+                        cropped = run_crop_pipeline(tmp.name, method)
 
                     output_info = resolve_output_format(input_name, uploaded_file.content_type)
                     output_stem = Path(input_name).stem or f"image_{index}"
