@@ -1558,6 +1558,7 @@ def main():
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 import tempfile
 
 app = FastAPI(title="smart-crop API")
@@ -1739,63 +1740,77 @@ async def crop_batch_endpoint(
     if not uploaded_files:
         raise HTTPException(status_code=400, detail="No files uploaded")
 
-    zip_buffer = io.BytesIO()
+    zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
+    zip_tmp_path = zip_tmp.name
+    zip_tmp.close()
     manifest = {"method": method, "processed": [], "failed": []}
     used_output_names = {}
 
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-        for index, uploaded_file in enumerate(uploaded_files, start=1):
-            suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
-            tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-            input_name = uploaded_file.filename or f"image_{index}{suffix}"
+    try:
+        with zipfile.ZipFile(zip_tmp_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+            for index, uploaded_file in enumerate(uploaded_files, start=1):
+                suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
+                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                input_name = uploaded_file.filename or f"image_{index}{suffix}"
 
-            try:
-                content = await uploaded_file.read()
-                if not content:
-                    raise ValueError("Uploaded file is empty")
-
-                tmp.write(content)
-                tmp.flush()
-                tmp.close()
-
-                cropped = run_crop_pipeline(tmp.name, method)
-
-                output_info = resolve_output_format(input_name, uploaded_file.content_type)
-                output_stem = Path(input_name).stem or f"image_{index}"
-                base_output_name = f"{output_stem}_cropped"
-                name_count = used_output_names.get(base_output_name, 0)
-                used_output_names[base_output_name] = name_count + 1
-                suffix_name = f"_{name_count}" if name_count else ""
-                output_filename = f"{base_output_name}{suffix_name}.{output_info['extension']}"
-
-                zip_file.writestr(output_filename, image_to_buffer(cropped, output_info['pil_format']).getvalue())
-                manifest["processed"].append(
-                    {
-                        "input": input_name,
-                        "output": output_filename,
-                    }
-                )
-            except HTTPException as exc:
-                manifest["failed"].append(
-                    {
-                        "input": input_name,
-                        "error": str(exc.detail),
-                    }
-                )
-            except Exception as exc:
-                manifest["failed"].append(
-                    {
-                        "input": input_name,
-                        "error": str(exc),
-                    }
-                )
-            finally:
                 try:
-                    os.unlink(tmp.name)
-                except Exception:
-                    pass
+                    content = await uploaded_file.read()
+                    if not content:
+                        raise ValueError("Uploaded file is empty")
 
-        zip_file.writestr("manifest.json", json.dumps(manifest, indent=2))
+                    tmp.write(content)
+                    tmp.flush()
+                    tmp.close()
+
+                    cropped = run_crop_pipeline(tmp.name, method)
+
+                    output_info = resolve_output_format(input_name, uploaded_file.content_type)
+                    output_stem = Path(input_name).stem or f"image_{index}"
+                    base_output_name = f"{output_stem}_cropped"
+                    name_count = used_output_names.get(base_output_name, 0)
+                    used_output_names[base_output_name] = name_count + 1
+                    suffix_name = f"_{name_count}" if name_count else ""
+                    output_filename = f"{base_output_name}{suffix_name}.{output_info['extension']}"
+
+                    output_buffer = image_to_buffer(cropped, output_info['pil_format'])
+                    try:
+                        zip_file.writestr(output_filename, output_buffer.getbuffer())
+                    finally:
+                        output_buffer.close()
+
+                    manifest["processed"].append(
+                        {
+                            "input": input_name,
+                            "output": output_filename,
+                        }
+                    )
+                except HTTPException as exc:
+                    manifest["failed"].append(
+                        {
+                            "input": input_name,
+                            "error": str(exc.detail),
+                        }
+                    )
+                except Exception as exc:
+                    manifest["failed"].append(
+                        {
+                            "input": input_name,
+                            "error": str(exc),
+                        }
+                    )
+                finally:
+                    try:
+                        os.unlink(tmp.name)
+                    except Exception:
+                        pass
+
+            zip_file.writestr("manifest.json", json.dumps(manifest, indent=2))
+    except Exception:
+        try:
+            os.unlink(zip_tmp_path)
+        except Exception:
+            pass
+        raise
 
     if not manifest["processed"]:
         raise HTTPException(
@@ -1806,9 +1821,24 @@ async def crop_batch_endpoint(
             },
         )
 
-    zip_buffer.seek(0)
+    zip_stream = open(zip_tmp_path, "rb")
+
+    def cleanup_zip_file(stream, path):
+        try:
+            stream.close()
+        finally:
+            try:
+                os.unlink(path)
+            except Exception:
+                pass
+
     headers = {"Content-Disposition": 'attachment; filename="cropped_batch.zip"'}
-    return StreamingResponse(zip_buffer, media_type="application/zip", headers=headers)
+    return StreamingResponse(
+        zip_stream,
+        media_type="application/zip",
+        headers=headers,
+        background=BackgroundTask(cleanup_zip_file, zip_stream, zip_tmp_path),
+    )
 
 
 if __name__ == "__main__":
