@@ -252,6 +252,48 @@ try:
 except ImportError:
     print("rawpy not installed; RAW support will not be available.")
 
+
+MAX_DECODED_MP = float(os.getenv("SMARTCROP_MAX_MP", "20"))
+
+
+def _compute_resize_target(width, height, max_dim, max_megapixels):
+    """Compute resize target constrained by max dimension and megapixel budget."""
+    if width <= 0 or height <= 0:
+        return width, height
+
+    scale_dim = min(max_dim / width, max_dim / height, 1.0)
+
+    pixel_budget = max_megapixels * 1_000_000
+    current_pixels = width * height
+    scale_mp = math.sqrt(pixel_budget / current_pixels) if current_pixels > pixel_budget else 1.0
+
+    scale = min(scale_dim, scale_mp, 1.0)
+    if scale >= 1.0:
+        return width, height
+
+    return max(1, int(width * scale)), max(1, int(height * scale))
+
+
+def _resize_for_limits(pil_img, max_dim, max_megapixels, sharpen):
+    """Aggressively downscale oversized images before converting to NumPy/OpenCV."""
+    width, height = pil_img.size
+    target_w, target_h = _compute_resize_target(width, height, max_dim, max_megapixels)
+    if (target_w, target_h) != (width, height):
+        pil_img = pil_img.resize((target_w, target_h), Image.LANCZOS)
+        if sharpen:
+            pil_img = pil_img.filter(ImageFilter.SHARPEN)
+    return pil_img
+
+
+def _to_bgr_and_rgb_pil(pil_img, enhance_lighting=False):
+    """Convert PIL image to BGR (for detection) and keep one synced RGB PIL copy."""
+    rgb_pil = pil_img.convert("RGB") if pil_img.mode != "RGB" else pil_img
+    cv_img = cv2.cvtColor(np.asarray(rgb_pil), cv2.COLOR_RGB2BGR)
+    if enhance_lighting:
+        cv_img = enhance_lighting_for_faces(cv_img)
+        rgb_pil = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+    return cv_img, rgb_pil
+
 def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
     """
     Read an image from a file path, with optional resizing, sharpening, and lighting enhancement.
@@ -275,18 +317,9 @@ def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
             with rawpy.imread(input_path) as raw:
                 rgb = raw.postprocess()
             pil_img = Image.fromarray(rgb)
-            scale = min(max_dim / pil_img.width, max_dim / pil_img.height, 1)
-            if scale < 1:
-                new_size = (int(pil_img.width * scale), int(pil_img.height * scale))
-                pil_img = pil_img.resize(new_size, Image.LANCZOS)
-                if sharpen:
-                    pil_img = pil_img.filter(ImageFilter.SHARPEN)
             metadata = pil_img.info.copy()
-            pil_img = pil_img.convert("RGB")
-            cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-            if enhance_lighting:
-                cv_img = enhance_lighting_for_faces(cv_img)
-                pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+            pil_img = _resize_for_limits(pil_img, max_dim, MAX_DECODED_MP, sharpen)
+            cv_img, pil_img = _to_bgr_and_rgb_pil(pil_img, enhance_lighting=enhance_lighting)
             return cv_img, pil_img, metadata
         except Exception as e:
             print(f"RAW image read error: {e}")
@@ -302,12 +335,6 @@ def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
             pil_img = Image.frombytes(
                 heif_file.mode, heif_file.size, heif_file.data, "raw"
             )
-            scale = min(max_dim / pil_img.width, max_dim / pil_img.height, 1)
-            if scale < 1:
-                new_size = (int(pil_img.width * scale), int(pil_img.height * scale))
-                pil_img = pil_img.resize(new_size, Image.LANCZOS)
-                if sharpen:
-                    pil_img = pil_img.filter(ImageFilter.SHARPEN)
             metadata = {}
             try:
                 if hasattr(heif_file, "color_profile"):
@@ -323,14 +350,8 @@ def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
                 print(f"Color profile extraction warning: {e}")
             if hasattr(heif_file, "metadata"):
                 metadata.update(heif_file.metadata)
-            pil_img = pil_img.convert("RGB")
-            cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-            # Apply lighting enhancement if requested
-            if enhance_lighting:
-                cv_img = enhance_lighting_for_faces(cv_img)
-                # Update PIL image to match enhanced OpenCV image
-                pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+            pil_img = _resize_for_limits(pil_img, max_dim, MAX_DECODED_MP, sharpen)
+            cv_img, pil_img = _to_bgr_and_rgb_pil(pil_img, enhance_lighting=enhance_lighting)
 
             return cv_img, pil_img, metadata
         except Exception as e:
@@ -340,26 +361,25 @@ def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
     # --- Standard Image Handling ---
     else:
         try:
-            pil_img = ImageOps.exif_transpose(Image.open(input_path))
-            scale = min(max_dim / pil_img.width, max_dim / pil_img.height, 1)
-            if scale < 1:
-                new_size = (int(pil_img.width * scale), int(pil_img.height * scale))
-                pil_img = pil_img.resize(new_size, Image.LANCZOS)
-                if sharpen:
-                    pil_img = pil_img.filter(ImageFilter.SHARPEN)
+            with Image.open(input_path) as opened:
+                src_w, src_h = opened.size
+                src_mp = (src_w * src_h) / 1_000_000
+                if src_mp > (MAX_DECODED_MP * 4):
+                    print(
+                        f"Image too large to process safely ({src_mp:.1f}MP). "
+                        f"Limit is {MAX_DECODED_MP:.1f}MP (hard stop at {MAX_DECODED_MP * 4:.1f}MP)."
+                    )
+                    return None, None, {}
+
+                pil_img = ImageOps.exif_transpose(opened)
+                pil_img = _resize_for_limits(pil_img, max_dim, MAX_DECODED_MP, sharpen)
+
             metadata = pil_img.info.copy()
             try:
                 metadata["exif"] = piexif.dump(piexif.load(input_path))
             except Exception:
                 pass
-            pil_img = pil_img.convert("RGB")
-            cv_img = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-            # Apply lighting enhancement if requested
-            if enhance_lighting:
-                cv_img = enhance_lighting_for_faces(cv_img)
-                # Update PIL image to match enhanced OpenCV image
-                pil_img = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
+            cv_img, pil_img = _to_bgr_and_rgb_pil(pil_img, enhance_lighting=enhance_lighting)
 
             return cv_img, pil_img, metadata
         except Exception as e:
