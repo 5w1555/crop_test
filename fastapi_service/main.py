@@ -1567,6 +1567,7 @@ app = FastAPI(title="smart-crop API")
 
 MAX_UPLOAD_MB = int(os.getenv("SMARTCROP_MAX_UPLOAD_MB", "12" if os.getenv("RENDER") else "25"))
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+UPLOAD_READ_CHUNK_BYTES = int(os.getenv("SMARTCROP_UPLOAD_CHUNK_MB", "2")) * 1024 * 1024
 MAX_BATCH_FILES = int(os.getenv("SMARTCROP_MAX_BATCH_FILES", "8"))
 CROP_CONCURRENCY = max(1, int(os.getenv("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv("RENDER") else "2")))
 SLOT_ACQUIRE_TIMEOUT_SECONDS = float(os.getenv("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20"))
@@ -1575,12 +1576,25 @@ PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true
 _crop_request_semaphore = asyncio.Semaphore(CROP_CONCURRENCY)
 
 
-def _validate_upload_size(content: bytes, file_label: str):
-    if len(content) > MAX_UPLOAD_BYTES:
+def _validate_upload_size(total_bytes: int, file_label: str):
+    if total_bytes > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
             detail=f"{file_label} exceeds max upload size ({MAX_UPLOAD_MB} MB)",
         )
+
+
+async def _stream_upload_to_temp_file(upload_file: UploadFile, tmp_file, file_label: str) -> int:
+    total_bytes = 0
+    while True:
+        chunk = await upload_file.read(UPLOAD_READ_CHUNK_BYTES)
+        if not chunk:
+            break
+        total_bytes += len(chunk)
+        _validate_upload_size(total_bytes, file_label)
+        tmp_file.write(chunk)
+    tmp_file.flush()
+    return total_bytes
 
 
 def _preload_model_worker():
@@ -1649,13 +1663,10 @@ async def crop_endpoint(
     suffix = os.path.splitext(file.filename)[1] or ".jpg"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     try:
-        content = await file.read()
-        _validate_upload_size(content, file.filename or "upload")
+        await _stream_upload_to_temp_file(file, tmp, file.filename or "upload")
+        tmp.close()
 
         async with crop_request_slot():
-            tmp.write(content)
-            tmp.flush()
-            tmp.close()
             cropped = run_crop_pipeline(tmp.name, method)
             output_info = resolve_output_format(file.filename, file.content_type)
             buf = image_to_buffer(cropped, output_info['pil_format'])
@@ -1813,16 +1824,13 @@ async def crop_batch_endpoint(
                 input_name = uploaded_file.filename or f"image_{index}{suffix}"
 
                 try:
-                    content = await uploaded_file.read()
-                    if not content:
+                    total_bytes = await _stream_upload_to_temp_file(uploaded_file, tmp, input_name)
+                    tmp.close()
+
+                    if total_bytes == 0:
                         raise ValueError("Uploaded file is empty")
-                    _validate_upload_size(content, input_name)
 
                     async with crop_request_slot():
-                        tmp.write(content)
-                        tmp.flush()
-                        tmp.close()
-
                         cropped = run_crop_pipeline(tmp.name, method)
 
                     output_info = resolve_output_format(input_name, uploaded_file.content_type)
