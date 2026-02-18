@@ -20,6 +20,19 @@ export SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000,https://your-frontend.e
 
 If this variable is not set, the API defaults to localhost development origins only (`http://localhost:3000` and `http://127.0.0.1:3000`).
 
+Image safety/performance limits (recommended):
+
+```
+# Maximum decoded image megapixels before resize/downscale logic kicks in.
+# Default: 20
+export SMARTCROP_MAX_MP=20
+```
+
+Notes:
+- Images larger than `SMARTCROP_MAX_MP` are aggressively downscaled before OpenCV/Numpy conversion.
+- Extremely large inputs (more than 4× `SMARTCROP_MAX_MP`) are rejected early to avoid excessive memory use.
+- For small containers (1-2 GB RAM), keep `SMARTCROP_MAX_MP` around `12-20`; raise only if you truly need higher-resolution face crops.
+
 3. Start the server:
 
 ```
