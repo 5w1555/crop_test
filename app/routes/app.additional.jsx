@@ -162,6 +162,11 @@ export const action = async ({ request }) => {
     const response = await cropImages(files, { method: planReservation.effectiveMethod });
     const mimeType = response.headers.get("content-type") || "application/octet-stream";
     if (!mimeType.includes("application/zip")) {
+      const bodyPreview = (await response.text()).slice(0, 500);
+      console.error("Smart Crop API returned unexpected content type", {
+        mimeType,
+        bodyPreview,
+      });
       return {
         error: `Expected application/zip response but received ${mimeType}.`,
       };
@@ -177,6 +182,11 @@ export const action = async ({ request }) => {
       expiresInSeconds: prepared.expiresInSeconds,
     });
   } catch (error) {
+    console.error("Crop action failed", {
+      error: error instanceof Error ? error.message : error,
+      fileCount: files.length,
+      method: planReservation.effectiveMethod,
+    });
     return {
       error:
         error instanceof Error
@@ -287,7 +297,18 @@ export default function CropImagePage() {
         method: "POST",
         body: formData,
       });
-      const payload = await response.json();
+      let payload;
+      const responseType = response.headers.get("content-type") || "";
+
+      if (responseType.includes("application/json")) {
+        payload = await response.json();
+      } else {
+        const responseText = await response.text();
+        const message = responseText.includes("<!DOCTYPE")
+          ? "Unexpected HTML response from crop endpoint. Check server logs for details."
+          : responseText;
+        throw new Error(message || "Unable to prepare download link.");
+      }
 
       if (!response.ok || !payload?.ok || !payload?.downloadUrl) {
         throw new Error(payload?.error || "Unable to prepare download link.");
