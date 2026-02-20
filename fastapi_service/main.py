@@ -1678,7 +1678,7 @@ async def crop_endpoint(
 ):
     """
     Upload an image and return a cropped image.
-    `method` can be: auto (default), head_bust, frontal, profile, chin, nose, below_lips
+    `method` can be: auto (default), head_bust, frontal, profile, chin, nose, below_lips, center_content
     """
     suffix = os.path.splitext(file.filename)[1] or ".jpg"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -1739,6 +1739,8 @@ def run_crop_pipeline(
         cropped = crop_nose_image(pil_img, box=box, landmarks=landmarks, metadata=metadata)
     elif method == "below_lips":
         cropped = crop_below_lips_image(pil_img, landmarks=landmarks, metadata=metadata)
+    elif method == "center_content":
+        cropped = center_content_crop(pil_img, metadata=metadata)
     else:
         raise HTTPException(status_code=400, detail="Unknown method")
 

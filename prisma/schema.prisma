@@ -31,3 +31,13 @@ model Session {
   collaborator  Boolean?  @default(false)
   emailVerified Boolean?  @default(false)
 }
+
+model ShopPlanUsage {
+  id              String   @id @default(cuid())
+  shop            String   @unique
+  plan            String   @default("free")
+  periodStart     DateTime
+  imagesProcessed Int      @default(0)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+}
