@@ -8,6 +8,7 @@ import { commitPlanUsage, getShopPlanUsage, reservePlanCapacity } from "../utils
 import { cropImages, health } from "../utils/smartCropClient";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
+import { prepareDownloadFromResponse, takePreparedDownload } from "../utils/preparedDownloads.server";
 
 const CROP_METHODS = [
   {
@@ -64,6 +65,29 @@ function validateImageFile(file) {
 }
 
 export const loader = async ({ request }) => {
+  const url = new URL(request.url);
+  const downloadToken = url.searchParams.get("download");
+
+  if (downloadToken) {
+    const preparedDownload = takePreparedDownload(downloadToken);
+
+    if (!preparedDownload) {
+      return new Response("Download link is invalid or expired.", { status: 410 });
+    }
+
+    const response = new Response(preparedDownload.stream, {
+      status: 200,
+      headers: {
+        "content-type": preparedDownload.mimeType,
+        "content-disposition": `attachment; filename="${preparedDownload.filename}"`,
+      },
+    });
+
+    response.headers.set("cache-control", "no-store");
+
+    return response;
+  }
+
   const { session, admin, billing } = await authenticate.admin(request);
   const apiHealthy = await health();
   const billingState = await getBillingState({ billing });
@@ -145,6 +169,17 @@ export const action = async ({ request }) => {
 
     await commitPlanUsage({ shop: session.shop, imageCount: files.length });
 
+    const responseMode = String(formData.get("response_mode") || "stream");
+    if (responseMode === "link") {
+      const prepared = await prepareDownloadFromResponse(response);
+      return Response.json({
+        ok: true,
+        filename: prepared.filename,
+        downloadUrl: `/app/additional?download=${prepared.token}`,
+        expiresInSeconds: prepared.expiresInSeconds,
+      });
+    }
+
     return new Response(response.body, {
       status: response.status,
       headers: {
@@ -174,6 +209,7 @@ export default function CropImagePage() {
   const [selectedMethod, setSelectedMethod] = useState("auto");
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
+  const [downloadLink, setDownloadLink] = useState("");
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -240,21 +276,51 @@ export default function CropImagePage() {
 
   const hasValidSelection = selectedFiles.length > 0 && !fileError;
 
-  const handleDownloadSubmit = (event) => {
+  const handleDownloadSubmit = async (event) => {
+    event.preventDefault();
+
     if (!hasValidSelection) {
-      event.preventDefault();
       if (fileError) {
         shopify.toast.show(fileError, { isError: true });
       }
       return;
     }
 
-    setIsSubmittingDownload(true);
-    shopify.toast.show("Cropping started. ZIP will stream directly to your browser download manager.");
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+    formData.set("response_mode", "link");
 
-    window.setTimeout(() => {
+    setIsSubmittingDownload(true);
+    setDownloadLink("");
+    shopify.toast.show("Cropping started. Preparing direct download link...");
+
+    try {
+      const response = await fetch(form.action || window.location.href, {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json();
+
+      if (!response.ok || !payload?.ok || !payload?.downloadUrl) {
+        throw new Error(payload?.error || "Unable to prepare download link.");
+      }
+
+      setDownloadLink(payload.downloadUrl);
+
+      const link = document.createElement("a");
+      link.href = payload.downloadUrl;
+      link.rel = "noreferrer";
+      link.click();
+
+      shopify.toast.show(`Download ready${payload.filename ? `: ${payload.filename}` : ""}`);
+    } catch (error) {
+      shopify.toast.show(
+        error instanceof Error ? error.message : "Unable to crop images.",
+        { isError: true },
+      );
+    } finally {
       setIsSubmittingDownload(false);
-    }, 2500);
+    }
   };
 
   return (
@@ -339,10 +405,10 @@ export default function CropImagePage() {
         <form
           method="post"
           encType="multipart/form-data"
-          target="crop-download-frame"
           onSubmit={handleDownloadSubmit}
         >
           <s-stack direction="block" gap="base">
+            <input type="hidden" name="response_mode" value="stream" />
             <label htmlFor="file">Image files</label>
             <s-box
               padding="base"
@@ -440,11 +506,14 @@ export default function CropImagePage() {
           </s-stack>
         </form>
 
-        <iframe
-          title="crop-download"
-          name="crop-download-frame"
-          style={{ display: "none" }}
-        />
+        {downloadLink && (
+          <s-banner tone="success">
+            Your ZIP is ready.
+            <a href={downloadLink} style={{ marginLeft: "8px" }}>
+              Download now
+            </a>
+          </s-banner>
+        )}
       </s-section>
 
       <s-section heading="2) Selected images">
