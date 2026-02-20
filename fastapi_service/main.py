@@ -1666,6 +1666,17 @@ app.add_middleware(
 )
 
 
+@app.get("/")
+async def root():
+    return {
+        "service": "smart-crop-api",
+        "status": "ok",
+        "health": "/health",
+        "docs": "/docs",
+        "openapi": "/openapi.json",
+    }
+
+
 @app.get("/health")
 async def health():
     return {"status": "ok"}
