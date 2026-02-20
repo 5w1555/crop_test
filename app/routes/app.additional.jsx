@@ -3,6 +3,8 @@ import { useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
+import { PLAN_CONFIG, buildPlanView } from "../utils/plan.js";
+import { commitPlanUsage, getShopPlanUsage, reservePlanCapacity } from "../utils/plan.server.js";
 import { cropImages, health } from "../utils/smartCropClient";
 
 const CROP_METHODS = [
@@ -60,13 +62,14 @@ function validateImageFile(file) {
 }
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
   const apiHealthy = await health();
-  return { apiHealthy };
+  const planUsage = buildPlanView(await getShopPlanUsage(session.shop));
+  return { apiHealthy, planUsage };
 };
 
 export const action = async ({ request }) => {
-  await authenticate.admin(request);
+  const { session } = await authenticate.admin(request);
 
   const formData = await request.formData();
   const files = formData.getAll("file");
@@ -80,10 +83,19 @@ export const action = async ({ request }) => {
     }
   }
 
-  const method = formData.get("method") || "auto";
+  const method = String(formData.get("method") || "auto");
+  const planReservation = await reservePlanCapacity({
+    shop: session.shop,
+    imageCount: files.length,
+    method,
+  });
+
+  if (!planReservation.ok) {
+    return { error: planReservation.error, plan: planReservation.plan };
+  }
 
   try {
-    const response = await cropImages(files, { method });
+    const response = await cropImages(files, { method: planReservation.effectiveMethod });
     const mimeType = response.headers.get("content-type") || "application/octet-stream";
     const contentDisposition =
       response.headers.get("content-disposition") ||
@@ -94,6 +106,8 @@ export const action = async ({ request }) => {
         error: `Expected application/zip response but received ${mimeType}.`,
       };
     }
+
+    await commitPlanUsage({ shop: session.shop, imageCount: files.length });
 
     return new Response(response.body, {
       status: response.status,
@@ -113,7 +127,7 @@ export const action = async ({ request }) => {
 };
 
 export default function CropImagePage() {
-  const { apiHealthy } = useLoaderData();
+  const { apiHealthy, planUsage } = useLoaderData();
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
@@ -200,6 +214,27 @@ export default function CropImagePage() {
         </s-banner>
       </s-section>
 
+
+      <s-section heading="Plan and usage">
+        <s-stack direction="block" gap="small">
+          <s-text>
+            Current plan: <strong>{planUsage.label}</strong>
+          </s-text>
+          <s-text>
+            Usage this month: {planUsage.imagesProcessed}/{planUsage.monthlyImageLimit} images
+          </s-text>
+          <s-text>
+            Remaining this month: {planUsage.remaining} images
+          </s-text>
+          {!planUsage.allowsFaceDetection && (
+            <s-banner tone="info">
+              Free plan uses content-aware crop only ({" "}
+              <code>center_content</code>). Face detection methods are available on the {PLAN_CONFIG.pro.label} plan (€{PLAN_CONFIG.pro.monthlyPriceEur}/month).
+            </s-banner>
+          )}
+        </s-stack>
+      </s-section>
+
       <s-section heading="1) Upload and configure">
         <s-paragraph>
           Upload one or more images, choose one of the crop methods implemented by
@@ -273,7 +308,9 @@ export default function CropImagePage() {
               value={selectedMethod}
               onChange={(event) => setSelectedMethod(event.currentTarget.value)}
             >
-              {CROP_METHODS.map((method) => (
+              {CROP_METHODS.filter((method) =>
+                planUsage.allowsFaceDetection ? true : method.value === "auto",
+              ).map((method) => (
                 <option key={method.value} value={method.value}>
                   {method.value}
                 </option>
@@ -282,6 +319,11 @@ export default function CropImagePage() {
 
             <s-box padding="base" border="base" borderRadius="base">
               <s-text fontWeight="semibold">Method details</s-text>
+              {!planUsage.allowsFaceDetection && (
+                <s-text tone="subdued">
+                  Free plan requests are automatically processed with <code>center_content</code>.
+                </s-text>
+              )}
               <s-stack direction="block" gap="small">
                 {CROP_METHODS.map((method) => (
                   <s-text
