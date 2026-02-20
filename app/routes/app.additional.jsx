@@ -63,6 +63,27 @@ function validateImageFile(file) {
   return null;
 }
 
+function getDownloadFilename(contentDisposition) {
+  if (!contentDisposition) return "cropped-images.zip";
+
+  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
+  if (utf8Match?.[1]) {
+    return decodeURIComponent(utf8Match[1]);
+  }
+
+  const quotedMatch = contentDisposition.match(/filename="([^"]+)"/i);
+  if (quotedMatch?.[1]) {
+    return quotedMatch[1];
+  }
+
+  const plainMatch = contentDisposition.match(/filename=([^;]+)/i);
+  if (plainMatch?.[1]) {
+    return plainMatch[1].trim();
+  }
+
+  return "cropped-images.zip";
+}
+
 export const loader = async ({ request }) => {
   const { session, admin, billing } = await authenticate.admin(request);
   const apiHealthy = await health();
@@ -240,6 +261,56 @@ export default function CropImagePage() {
 
   const hasValidSelection = selectedFiles.length > 0 && !fileError;
 
+  const handleDownloadSubmit = async (event) => {
+    event.preventDefault();
+
+    const form = event.currentTarget;
+    const formData = new FormData(form);
+
+    setIsSubmittingDownload(true);
+    shopify.toast.show("Cropping started. Your ZIP will download automatically.");
+
+    try {
+      const response = await fetch(form.action || window.location.href, {
+        method: "POST",
+        body: formData,
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+
+      if (!response.ok || !contentType.includes("application/zip")) {
+        if (contentType.includes("application/json")) {
+          const errorPayload = await response.json();
+          throw new Error(errorPayload?.error || "Unable to crop images.");
+        }
+
+        const text = await response.text();
+        throw new Error(text || `Crop failed with status ${response.status}`);
+      }
+
+      const filename = getDownloadFilename(response.headers.get("content-disposition"));
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      shopify.toast.show("Crop complete. ZIP download started.");
+    } catch (error) {
+      shopify.toast.show(
+        error instanceof Error ? error.message : "Unable to crop images.",
+        { isError: true },
+      );
+    } finally {
+      setIsSubmittingDownload(false);
+    }
+  };
+
   return (
     <s-page heading="Crop Images">
       <s-section heading="FastAPI connection">
@@ -322,11 +393,7 @@ export default function CropImagePage() {
         <form
           method="post"
           encType="multipart/form-data"
-          target="crop-download-frame"
-          onSubmit={() => {
-            setIsSubmittingDownload(true);
-            shopify.toast.show("Cropping started. Your ZIP will download automatically.");
-          }}
+          onSubmit={handleDownloadSubmit}
         >
           <s-stack direction="block" gap="base">
             <label htmlFor="file">Image files</label>
@@ -425,16 +492,6 @@ export default function CropImagePage() {
             {loadingText && <s-text>{loadingText}</s-text>}
           </s-stack>
         </form>
-        <iframe
-          title="crop-download-frame"
-          name="crop-download-frame"
-          style={{ display: "none" }}
-          onLoad={() => {
-            if (!isSubmittingDownload) return;
-            setIsSubmittingDownload(false);
-            shopify.toast.show("Crop complete. Download should begin shortly.");
-          }}
-        />
       </s-section>
 
       <s-section heading="2) Selected images">
@@ -490,7 +547,7 @@ export default function CropImagePage() {
           >
             Reset selection
           </s-button>
-          <s-text tone="subdued">Downloads are streamed directly from the server response.</s-text>
+          <s-text tone="subdued">Downloads are initiated from the app after the crop response is received.</s-text>
         </s-stack>
       </s-section>
     </s-page>
