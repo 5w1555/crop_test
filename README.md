@@ -103,6 +103,7 @@ At minimum for local/prod you need:
 - `SHOPIFY_API_SECRET`
 - `SHOPIFY_APP_URL`
 - `SCOPES`
+- `SHOPIFY_BILLING_TEST_MODE` (`false` in production; `true` in development/staging)
 - `SMARTCROP_API_URL` (URL of the deployed Smart Crop FastAPI service)
 - `SMARTCROP_FRONTEND_ORIGINS` on the FastAPI service (comma-separated allowed frontend origins, for example `https://your-admin-app.onrender.com,http://localhost:3000`; do not rely on `*` in production)
 - `SMARTCROP_MAX_UPLOAD_MB` on FastAPI (max upload size per file, default `12` on Render)
@@ -134,6 +135,13 @@ If you are using Neon, configure both database URLs:
 - `DIRECT_DATABASE_URL`: Neon **direct/non-pooled** connection string, with `sslmode=require`.
 
 This split ensures runtime queries use pooling while Prisma migrations use a direct connection.
+
+### Billing mode by environment
+
+Set `SHOPIFY_BILLING_TEST_MODE` per environment so Shopify billing behaves correctly:
+
+- **Production:** `SHOPIFY_BILLING_TEST_MODE=false` (real charges)
+- **Development/Staging:** `SHOPIFY_BILLING_TEST_MODE=true` (test charges)
 
 ### 3) Render deployment baseline
 
