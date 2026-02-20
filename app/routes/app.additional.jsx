@@ -6,6 +6,8 @@ import { authenticate } from "../shopify.server";
 import { PLAN_CONFIG, buildPlanView } from "../utils/plan.js";
 import { commitPlanUsage, getShopPlanUsage, reservePlanCapacity } from "../utils/plan.server.js";
 import { cropImages, health } from "../utils/smartCropClient";
+import { getBillingState } from "../utils/billing.server";
+import { PRO_PLAN } from "../utils/billing";
 
 const CROP_METHODS = [
   {
@@ -62,14 +64,46 @@ function validateImageFile(file) {
 }
 
 export const loader = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, admin, billing } = await authenticate.admin(request);
   const apiHealthy = await health();
-  const planUsage = buildPlanView(await getShopPlanUsage(session.shop));
-  return { apiHealthy, planUsage };
+  const billingState = await getBillingState({ billing });
+
+  const productsResponse = await admin.graphql(
+    `#graphql
+    query CropReadyProducts {
+      products(first: 5, sortKey: UPDATED_AT, reverse: true) {
+        nodes {
+          id
+          title
+          handle
+          totalInventory
+          featuredImage {
+            url
+            altText
+          }
+        }
+      }
+    }`,
+  );
+  const productsJson = await productsResponse.json();
+  const products = productsJson.data?.products?.nodes || [];
+
+  const planUsage = buildPlanView(
+    await getShopPlanUsage(session.shop, {
+      hasActiveProPlan: billingState.hasActivePayment,
+    }),
+  );
+
+  return {
+    apiHealthy,
+    planUsage,
+    hasActiveProPlan: billingState.hasActivePayment,
+    products,
+  };
 };
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  const { session, billing } = await authenticate.admin(request);
 
   const formData = await request.formData();
   const files = formData.getAll("file");
@@ -84,10 +118,12 @@ export const action = async ({ request }) => {
   }
 
   const method = String(formData.get("method") || "auto");
+  const billingState = await getBillingState({ billing });
   const planReservation = await reservePlanCapacity({
     shop: session.shop,
     imageCount: files.length,
     method,
+    hasActiveProPlan: billingState.hasActivePayment,
   });
 
   if (!planReservation.ok) {
@@ -127,7 +163,7 @@ export const action = async ({ request }) => {
 };
 
 export default function CropImagePage() {
-  const { apiHealthy, planUsage } = useLoaderData();
+  const { apiHealthy, planUsage, hasActiveProPlan, products } = useLoaderData();
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
@@ -232,7 +268,49 @@ export default function CropImagePage() {
               <code>center_content</code>). Face detection methods are available on the {PLAN_CONFIG.pro.label} plan (€{PLAN_CONFIG.pro.monthlyPriceEur}/month).
             </s-banner>
           )}
+          {!hasActiveProPlan && (
+            <s-text>
+              To activate {PRO_PLAN}, open <s-link href="/app/billing">Billing</s-link> and approve the Shopify app subscription.
+            </s-text>
+          )}
         </s-stack>
+      </s-section>
+
+      <s-section heading="Shopify product context">
+        <s-paragraph>
+          Latest products from your catalog are shown below so you can quickly verify which assets should be exported and cropped.
+        </s-paragraph>
+        {!products.length && <s-text tone="subdued">No products found yet.</s-text>}
+        {products.length > 0 && (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                <th align="left">Title</th>
+                <th align="left">Handle</th>
+                <th align="right">Inventory</th>
+                <th align="left">Featured image</th>
+              </tr>
+            </thead>
+            <tbody>
+              {products.map((product) => (
+                <tr key={product.id}>
+                  <td>{product.title}</td>
+                  <td>{product.handle}</td>
+                  <td align="right">{product.totalInventory ?? 0}</td>
+                  <td>
+                    {product.featuredImage ? (
+                      <a href={product.featuredImage.url} target="_blank" rel="noreferrer">
+                        View image
+                      </a>
+                    ) : (
+                      <span>—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </s-section>
 
       <s-section heading="1) Upload and configure">
