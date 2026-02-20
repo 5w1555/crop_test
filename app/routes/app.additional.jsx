@@ -63,27 +63,6 @@ function validateImageFile(file) {
   return null;
 }
 
-function getDownloadFilename(contentDisposition) {
-  if (!contentDisposition) return "cropped-images.zip";
-
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    return decodeURIComponent(utf8Match[1]);
-  }
-
-  const quotedMatch = contentDisposition.match(/filename="([^"]+)"/i);
-  if (quotedMatch?.[1]) {
-    return quotedMatch[1];
-  }
-
-  const plainMatch = contentDisposition.match(/filename=([^;]+)/i);
-  if (plainMatch?.[1]) {
-    return plainMatch[1].trim();
-  }
-
-  return "cropped-images.zip";
-}
-
 export const loader = async ({ request }) => {
   const { session, admin, billing } = await authenticate.admin(request);
   const apiHealthy = await health();
@@ -261,54 +240,21 @@ export default function CropImagePage() {
 
   const hasValidSelection = selectedFiles.length > 0 && !fileError;
 
-  const handleDownloadSubmit = async (event) => {
-    event.preventDefault();
-
-    const form = event.currentTarget;
-    const formData = new FormData(form);
+  const handleDownloadSubmit = (event) => {
+    if (!hasValidSelection) {
+      event.preventDefault();
+      if (fileError) {
+        shopify.toast.show(fileError, { isError: true });
+      }
+      return;
+    }
 
     setIsSubmittingDownload(true);
-    shopify.toast.show("Cropping started. Your ZIP will download automatically.");
+    shopify.toast.show("Cropping started. ZIP will stream directly to your browser download manager.");
 
-    try {
-      const response = await fetch(form.action || window.location.href, {
-        method: "POST",
-        body: formData,
-      });
-
-      const contentType = response.headers.get("content-type") || "";
-
-      if (!response.ok || !contentType.includes("application/zip")) {
-        if (contentType.includes("application/json")) {
-          const errorPayload = await response.json();
-          throw new Error(errorPayload?.error || "Unable to crop images.");
-        }
-
-        const text = await response.text();
-        throw new Error(text || `Crop failed with status ${response.status}`);
-      }
-
-      const filename = getDownloadFilename(response.headers.get("content-disposition"));
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement("a");
-
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
-      link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
-
-      shopify.toast.show("Crop complete. ZIP download started.");
-    } catch (error) {
-      shopify.toast.show(
-        error instanceof Error ? error.message : "Unable to crop images.",
-        { isError: true },
-      );
-    } finally {
+    window.setTimeout(() => {
       setIsSubmittingDownload(false);
-    }
+    }, 2500);
   };
 
   return (
@@ -393,6 +339,7 @@ export default function CropImagePage() {
         <form
           method="post"
           encType="multipart/form-data"
+          target="crop-download-frame"
           onSubmit={handleDownloadSubmit}
         >
           <s-stack direction="block" gap="base">
@@ -492,6 +439,12 @@ export default function CropImagePage() {
             {loadingText && <s-text>{loadingText}</s-text>}
           </s-stack>
         </form>
+
+        <iframe
+          title="crop-download"
+          name="crop-download-frame"
+          style={{ display: "none" }}
+        />
       </s-section>
 
       <s-section heading="2) Selected images">
