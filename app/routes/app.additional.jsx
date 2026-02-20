@@ -293,9 +293,14 @@ export default function CropImagePage() {
     shopify.toast.show("Cropping started. Preparing direct download link...");
 
     try {
-      const response = await fetch(form.action || window.location.href, {
+      const actionUrl = form.getAttribute("action") || window.location.pathname + window.location.search;
+      const response = await fetch(actionUrl, {
         method: "POST",
         body: formData,
+        headers: {
+          Accept: "application/json",
+          "X-Requested-With": "XMLHttpRequest",
+        },
       });
       let payload;
       const responseType = response.headers.get("content-type") || "";
@@ -304,8 +309,16 @@ export default function CropImagePage() {
         payload = await response.json();
       } else {
         const responseText = await response.text();
+        const snippet = responseText.slice(0, 200);
+        console.error("Crop submit received non-JSON response", {
+          status: response.status,
+          redirected: response.redirected,
+          url: response.url,
+          responseType,
+          snippet,
+        });
         const message = responseText.includes("<!DOCTYPE")
-          ? "Unexpected HTML response from crop endpoint. Check server logs for details."
+          ? `Crop request did not reach JSON action (HTTP ${response.status}). Check app URL/session setup.`
           : responseText;
         throw new Error(message || "Unable to prepare download link.");
       }
