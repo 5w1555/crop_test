@@ -8,6 +8,7 @@ import { commitPlanUsage, getShopPlanUsage, reservePlanCapacity } from "../utils
 import { cropImages, health } from "../utils/smartCropClient";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
+import { prepareDownloadFromResponse, takePreparedDownload } from "../utils/preparedDownloads.server";
 
 const CROP_METHODS = [
   {
@@ -63,28 +64,30 @@ function validateImageFile(file) {
   return null;
 }
 
-function getDownloadFilename(contentDisposition) {
-  if (!contentDisposition) return "cropped-images.zip";
-
-  const utf8Match = contentDisposition.match(/filename\*=UTF-8''([^;]+)/i);
-  if (utf8Match?.[1]) {
-    return decodeURIComponent(utf8Match[1]);
-  }
-
-  const quotedMatch = contentDisposition.match(/filename="([^"]+)"/i);
-  if (quotedMatch?.[1]) {
-    return quotedMatch[1];
-  }
-
-  const plainMatch = contentDisposition.match(/filename=([^;]+)/i);
-  if (plainMatch?.[1]) {
-    return plainMatch[1].trim();
-  }
-
-  return "cropped-images.zip";
-}
-
 export const loader = async ({ request }) => {
+  const url = new URL(request.url);
+  const downloadToken = url.searchParams.get("download");
+
+  if (downloadToken) {
+    const preparedDownload = takePreparedDownload(downloadToken);
+
+    if (!preparedDownload) {
+      return new Response("Download link is invalid or expired.", { status: 410 });
+    }
+
+    const response = new Response(preparedDownload.stream, {
+      status: 200,
+      headers: {
+        "content-type": preparedDownload.mimeType,
+        "content-disposition": `attachment; filename="${preparedDownload.filename}"`,
+      },
+    });
+
+    response.headers.set("cache-control", "no-store");
+
+    return response;
+  }
+
   const { session, admin, billing } = await authenticate.admin(request);
   const apiHealthy = await health();
   const billingState = await getBillingState({ billing });
@@ -166,6 +169,17 @@ export const action = async ({ request }) => {
 
     await commitPlanUsage({ shop: session.shop, imageCount: files.length });
 
+    const responseMode = String(formData.get("response_mode") || "stream");
+    if (responseMode === "link") {
+      const prepared = await prepareDownloadFromResponse(response);
+      return Response.json({
+        ok: true,
+        filename: prepared.filename,
+        downloadUrl: `/app/additional?download=${prepared.token}`,
+        expiresInSeconds: prepared.expiresInSeconds,
+      });
+    }
+
     return new Response(response.body, {
       status: response.status,
       headers: {
@@ -195,6 +209,7 @@ export default function CropImagePage() {
   const [selectedMethod, setSelectedMethod] = useState("auto");
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
+  const [downloadLink, setDownloadLink] = useState("");
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -264,43 +279,40 @@ export default function CropImagePage() {
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
 
+    if (!hasValidSelection) {
+      if (fileError) {
+        shopify.toast.show(fileError, { isError: true });
+      }
+      return;
+    }
+
     const form = event.currentTarget;
     const formData = new FormData(form);
+    formData.set("response_mode", "link");
 
     setIsSubmittingDownload(true);
-    shopify.toast.show("Cropping started. Your ZIP will download automatically.");
+    setDownloadLink("");
+    shopify.toast.show("Cropping started. Preparing direct download link...");
 
     try {
       const response = await fetch(form.action || window.location.href, {
         method: "POST",
         body: formData,
       });
+      const payload = await response.json();
 
-      const contentType = response.headers.get("content-type") || "";
-
-      if (!response.ok || !contentType.includes("application/zip")) {
-        if (contentType.includes("application/json")) {
-          const errorPayload = await response.json();
-          throw new Error(errorPayload?.error || "Unable to crop images.");
-        }
-
-        const text = await response.text();
-        throw new Error(text || `Crop failed with status ${response.status}`);
+      if (!response.ok || !payload?.ok || !payload?.downloadUrl) {
+        throw new Error(payload?.error || "Unable to prepare download link.");
       }
 
-      const filename = getDownloadFilename(response.headers.get("content-disposition"));
-      const blob = await response.blob();
-      const url = URL.createObjectURL(blob);
+      setDownloadLink(payload.downloadUrl);
+
       const link = document.createElement("a");
-
-      link.href = url;
-      link.download = filename;
-      document.body.appendChild(link);
+      link.href = payload.downloadUrl;
+      link.rel = "noreferrer";
       link.click();
-      link.remove();
-      URL.revokeObjectURL(url);
 
-      shopify.toast.show("Crop complete. ZIP download started.");
+      shopify.toast.show(`Download ready${payload.filename ? `: ${payload.filename}` : ""}`);
     } catch (error) {
       shopify.toast.show(
         error instanceof Error ? error.message : "Unable to crop images.",
@@ -396,6 +408,7 @@ export default function CropImagePage() {
           onSubmit={handleDownloadSubmit}
         >
           <s-stack direction="block" gap="base">
+            <input type="hidden" name="response_mode" value="stream" />
             <label htmlFor="file">Image files</label>
             <s-box
               padding="base"
@@ -492,6 +505,15 @@ export default function CropImagePage() {
             {loadingText && <s-text>{loadingText}</s-text>}
           </s-stack>
         </form>
+
+        {downloadLink && (
+          <s-banner tone="success">
+            Your ZIP is ready.
+            <a href={downloadLink} style={{ marginLeft: "8px" }}>
+              Download now
+            </a>
+          </s-banner>
+        )}
       </s-section>
 
       <s-section heading="2) Selected images">
