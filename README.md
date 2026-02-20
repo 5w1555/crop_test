@@ -177,6 +177,19 @@ This guarantees migrations are applied before serving traffic.
 `[access_scopes]`
 - `scopes`: OAuth scopes your app requests.
 
+## Commercial readiness updates
+
+This app now includes a real Shopify billing implementation for the Pro tier:
+
+- Billing is configured in `app/shopify.server.js` using Shopify app subscriptions (`BillingInterval.Every30Days`, €10/month).
+- Merchants can start/cancel the subscription from `/app/billing`.
+- Crop quota + feature access are synchronized with Shopify billing state on every loader/action request.
+
+Shopify integration depth now includes merchant catalog context in `/app/additional`:
+
+- The app reads recent products (`products` query with title/handle/inventory/featuredImage).
+- This justifies a minimal `read_products` scope and removes the previously over-broad `write_products` request.
+
 `[auth]`
 - `redirect_urls`: Allowed OAuth callback URLs. In production, this must include your live app callback URL(s).
 

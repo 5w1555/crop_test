@@ -19,7 +19,15 @@ function getPaidShopsFromEnv() {
   );
 }
 
-function resolvePlanKey(shop, persistedPlan) {
+function resolvePlanKey({ shop, persistedPlan, hasActiveProPlan }) {
+  if (hasActiveProPlan === true) {
+    return "pro";
+  }
+
+  if (hasActiveProPlan === false) {
+    return "free";
+  }
+
   if (persistedPlan && PLAN_CONFIG[persistedPlan]) {
     return persistedPlan;
   }
@@ -31,12 +39,13 @@ function resolvePlanKey(shop, persistedPlan) {
   return "free";
 }
 
-export async function getShopPlanUsage(shop) {
+export async function getShopPlanUsage(shop, options = {}) {
+  const { hasActiveProPlan } = options;
   const monthStart = getPeriodStart();
   const existing = await prisma.shopPlanUsage.findUnique({ where: { shop } });
 
   if (!existing) {
-    const plan = resolvePlanKey(shop);
+    const plan = resolvePlanKey({ shop, hasActiveProPlan });
     return prisma.shopPlanUsage.create({
       data: {
         shop,
@@ -46,7 +55,11 @@ export async function getShopPlanUsage(shop) {
     });
   }
 
-  const nextPlan = resolvePlanKey(shop, existing.plan);
+  const nextPlan = resolvePlanKey({
+    shop,
+    persistedPlan: existing.plan,
+    hasActiveProPlan,
+  });
   const shouldResetMonth = existing.periodStart.getTime() !== monthStart.getTime();
   if (!shouldResetMonth && nextPlan === existing.plan) {
     return existing;
@@ -62,8 +75,8 @@ export async function getShopPlanUsage(shop) {
   });
 }
 
-export async function reservePlanCapacity({ shop, imageCount, method }) {
-  const usage = await getShopPlanUsage(shop);
+export async function reservePlanCapacity({ shop, imageCount, method, hasActiveProPlan }) {
+  const usage = await getShopPlanUsage(shop, { hasActiveProPlan });
   const planView = buildPlanView(usage);
 
   if (!planView.allowsFaceDetection && FACE_DETECTION_METHODS.has(method)) {
