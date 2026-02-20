@@ -157,10 +157,6 @@ export const action = async ({ request }) => {
   try {
     const response = await cropImages(files, { method: planReservation.effectiveMethod });
     const mimeType = response.headers.get("content-type") || "application/octet-stream";
-    const contentDisposition =
-      response.headers.get("content-disposition") ||
-      'attachment; filename="cropped-images.zip"';
-
     if (!mimeType.includes("application/zip")) {
       return {
         error: `Expected application/zip response but received ${mimeType}.`,
@@ -169,23 +165,12 @@ export const action = async ({ request }) => {
 
     await commitPlanUsage({ shop: session.shop, imageCount: files.length });
 
-    const responseMode = String(formData.get("response_mode") || "stream");
-    if (responseMode === "link") {
-      const prepared = await prepareDownloadFromResponse(response);
-      return Response.json({
-        ok: true,
-        filename: prepared.filename,
-        downloadUrl: `/app/additional?download=${prepared.token}`,
-        expiresInSeconds: prepared.expiresInSeconds,
-      });
-    }
-
-    return new Response(response.body, {
-      status: response.status,
-      headers: {
-        "content-type": mimeType,
-        "content-disposition": contentDisposition,
-      },
+    const prepared = await prepareDownloadFromResponse(response);
+    return Response.json({
+      ok: true,
+      filename: prepared.filename,
+      downloadUrl: `/app/additional?download=${prepared.token}`,
+      expiresInSeconds: prepared.expiresInSeconds,
     });
   } catch (error) {
     return {
@@ -288,7 +273,6 @@ export default function CropImagePage() {
 
     const form = event.currentTarget;
     const formData = new FormData(form);
-    formData.set("response_mode", "link");
 
     setIsSubmittingDownload(true);
     setDownloadLink("");
@@ -307,12 +291,7 @@ export default function CropImagePage() {
 
       setDownloadLink(payload.downloadUrl);
 
-      const link = document.createElement("a");
-      link.href = payload.downloadUrl;
-      link.rel = "noreferrer";
-      link.click();
-
-      shopify.toast.show(`Download ready${payload.filename ? `: ${payload.filename}` : ""}`);
+      shopify.toast.show(`Download is ready${payload.filename ? `: ${payload.filename}` : ""}`);
     } catch (error) {
       shopify.toast.show(
         error instanceof Error ? error.message : "Unable to crop images.",
@@ -408,7 +387,6 @@ export default function CropImagePage() {
           onSubmit={handleDownloadSubmit}
         >
           <s-stack direction="block" gap="base">
-            <input type="hidden" name="response_mode" value="stream" />
             <label htmlFor="file">Image files</label>
             <s-box
               padding="base"
@@ -508,8 +486,8 @@ export default function CropImagePage() {
 
         {downloadLink && (
           <s-banner tone="success">
-            Your ZIP is ready.
-            <a href={downloadLink} style={{ marginLeft: "8px" }}>
+            Your ZIP is ready. Click to download the complete processed batch.
+            <a href={downloadLink} style={{ marginLeft: "8px" }} download>
               Download now
             </a>
           </s-banner>
@@ -569,7 +547,7 @@ export default function CropImagePage() {
           >
             Reset selection
           </s-button>
-          <s-text tone="subdued">Downloads are initiated from the app after the crop response is received.</s-text>
+          <s-text tone="subdued">Downloads use a generated link once the FastAPI batch ZIP has been fully prepared.</s-text>
         </s-stack>
       </s-section>
     </s-page>
