@@ -101,9 +101,13 @@ export const loader = async ({ request }) => {
           title
           handle
           totalInventory
-          featuredImage {
-            url
-            altText
+          featuredMedia {
+            preview {
+              image {
+                url
+                altText
+              }
+            }
           }
         }
       }
@@ -360,8 +364,8 @@ export default function CropImagePage() {
                   <td>{product.handle}</td>
                   <td align="right">{product.totalInventory ?? 0}</td>
                   <td>
-                    {product.featuredImage ? (
-                      <a href={product.featuredImage.url} target="_blank" rel="noreferrer">
+                    {product.featuredMedia?.preview?.image ? (
+                      <a href={product.featuredMedia.preview.image.url} target="_blank" rel="noreferrer">
                         View image
                       </a>
                     ) : (
