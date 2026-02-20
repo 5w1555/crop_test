@@ -24,6 +24,8 @@ services:
         value: https://smart-crop-app.onrender.com
       - key: SCOPES
         value: read_products
+      - key: SHOPIFY_BILLING_TEST_MODE
+        value: "false"
       - key: SHOP_CUSTOM_DOMAIN
         sync: false
       - key: SMARTCROP_API_URL
