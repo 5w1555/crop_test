@@ -23,7 +23,7 @@ services:
       - key: SHOPIFY_APP_URL
         value: https://smart-crop-app.onrender.com
       - key: SCOPES
-        value: write_products
+        value: read_products
       - key: SHOP_CUSTOM_DOMAIN
         sync: false
       - key: SMARTCROP_API_URL
