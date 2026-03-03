@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLoaderData, useRouteError } from "react-router";
+import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -198,6 +198,7 @@ export const action = async ({ request }) => {
 
 export default function CropImagePage() {
   const { apiHealthy, planUsage, hasActiveProPlan, products } = useLoaderData();
+  const cropFetcher = useFetcher();
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
@@ -209,6 +210,31 @@ export default function CropImagePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [downloadLink, setDownloadLink] = useState("");
+
+  useEffect(() => {
+    if (cropFetcher.state !== "idle") {
+      setIsSubmittingDownload(true);
+      return;
+    }
+
+    setIsSubmittingDownload(false);
+
+    if (!cropFetcher.data) {
+      return;
+    }
+
+    if (!cropFetcher.data.ok || !cropFetcher.data.downloadUrl) {
+      shopify.toast.show(cropFetcher.data.error || "Unable to prepare download link.", {
+        isError: true,
+      });
+      return;
+    }
+
+    setDownloadLink(cropFetcher.data.downloadUrl);
+    shopify.toast.show(
+      `Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`,
+    );
+  }, [cropFetcher.data, cropFetcher.state, shopify.toast]);
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -288,56 +314,13 @@ export default function CropImagePage() {
     const form = event.currentTarget;
     const formData = new FormData(form);
 
-    setIsSubmittingDownload(true);
     setDownloadLink("");
     shopify.toast.show("Cropping started. Preparing direct download link...");
 
-    try {
-      const actionUrl = form.getAttribute("action") || window.location.pathname + window.location.search;
-      const response = await fetch(actionUrl, {
-        method: "POST",
-        body: formData,
-        headers: {
-          Accept: "application/json",
-          "X-Requested-With": "XMLHttpRequest",
-        },
-      });
-      let payload;
-      const responseType = response.headers.get("content-type") || "";
-
-      if (responseType.includes("application/json")) {
-        payload = await response.json();
-      } else {
-        const responseText = await response.text();
-        const snippet = responseText.slice(0, 200);
-        console.error("Crop submit received non-JSON response", {
-          status: response.status,
-          redirected: response.redirected,
-          url: response.url,
-          responseType,
-          snippet,
-        });
-        const message = responseText.includes("<!DOCTYPE")
-          ? `Crop request did not reach JSON action (HTTP ${response.status}). Check app URL/session setup.`
-          : responseText;
-        throw new Error(message || "Unable to prepare download link.");
-      }
-
-      if (!response.ok || !payload?.ok || !payload?.downloadUrl) {
-        throw new Error(payload?.error || "Unable to prepare download link.");
-      }
-
-      setDownloadLink(payload.downloadUrl);
-
-      shopify.toast.show(`Download is ready${payload.filename ? `: ${payload.filename}` : ""}`);
-    } catch (error) {
-      shopify.toast.show(
-        error instanceof Error ? error.message : "Unable to crop images.",
-        { isError: true },
-      );
-    } finally {
-      setIsSubmittingDownload(false);
-    }
+    cropFetcher.submit(formData, {
+      method: "post",
+      encType: "multipart/form-data",
+    });
   };
 
   return (
