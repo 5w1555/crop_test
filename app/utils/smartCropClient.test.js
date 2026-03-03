@@ -3,12 +3,19 @@ import test from "node:test";
 import assert from "node:assert/strict";
 const moduleUrl = new URL("./smartCropClient.js", import.meta.url).href;
 
-async function loadClient(apiUrl) {
+async function loadClient(apiUrl, apiToken = "test-token") {
   if (apiUrl === undefined) {
     delete process.env.SMARTCROP_API_URL;
   } else {
     process.env.SMARTCROP_API_URL = apiUrl;
   }
+
+  if (apiToken === null) {
+    delete process.env.SMARTCROP_API_TOKEN;
+  } else {
+    process.env.SMARTCROP_API_TOKEN = apiToken;
+  }
+
   return import(`${moduleUrl}?t=${Date.now()}-${Math.random()}`);
 }
 
@@ -16,8 +23,10 @@ test("cropImage trims trailing slash from SMARTCROP_API_URL", async () => {
   const { cropImage } = await loadClient("https://crop.example/");
 
   let requestedUrl;
-  global.fetch = async (url) => {
+  let requestedHeaders;
+  global.fetch = async (url, options) => {
     requestedUrl = url;
+    requestedHeaders = options.headers;
     return new Response("ok", { status: 200 });
   };
 
@@ -25,6 +34,7 @@ test("cropImage trims trailing slash from SMARTCROP_API_URL", async () => {
   await cropImage(file);
 
   assert.equal(requestedUrl, "https://crop.example/crop");
+  assert.equal(requestedHeaders["X-SmartCrop-Token"], "test-token");
 });
 
 test("health uses Render fallback API URL when SMARTCROP_API_URL is not set", async () => {
@@ -65,6 +75,7 @@ test("cropImage posts form data to the crop endpoint", async () => {
 
   assert.equal(requestedUrl, "https://crop.example/crop");
   assert.equal(requestedOptions.method, "POST");
+  assert.equal(requestedOptions.headers["X-SmartCrop-Token"], "test-token");
   assert.ok(requestedOptions.body instanceof FormData);
   assert.equal(requestedOptions.body.get("method"), "profile");
   assert.equal(requestedOptions.body.get("file").name, "avatar.png");
@@ -105,6 +116,7 @@ test("cropImages posts repeated files form data to the batch crop endpoint", asy
 
   assert.equal(requestedUrl, "https://crop.example/crop/batch");
   assert.equal(requestedOptions.method, "POST");
+  assert.equal(requestedOptions.headers["X-SmartCrop-Token"], "test-token");
   assert.ok(requestedOptions.body instanceof FormData);
   assert.equal(requestedOptions.body.get("method"), "auto");
   const postedFiles = requestedOptions.body.getAll("files");
@@ -124,4 +136,12 @@ test("health returns true for ok responses and false when fetch fails", async ()
     throw new Error("network down");
   };
   assert.equal(await health(), false);
+});
+
+test("cropImage throws when SMARTCROP_API_TOKEN is missing", async () => {
+  const { cropImage } = await loadClient("https://crop.example", null);
+
+  const file = new File(["image-bytes"], "avatar.png", { type: "image/png" });
+
+  await assert.rejects(() => cropImage(file), /SMARTCROP_API_TOKEN is required/);
 });
