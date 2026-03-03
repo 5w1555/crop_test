@@ -1,4 +1,4 @@
-import prisma from "../db.server";
+import prisma from "../db.server.js";
 import {
   buildPlanView,
   FACE_DETECTION_METHODS,
