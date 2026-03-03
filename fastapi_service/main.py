@@ -254,9 +254,6 @@ except ImportError:
     print("rawpy not installed; RAW support will not be available.")
 
 
-MAX_DECODED_MP = float(os.getenv("SMARTCROP_MAX_MP", "20"))
-
-
 def _compute_resize_target(width, height, max_dim, max_megapixels):
     """Compute resize target constrained by max dimension and megapixel budget."""
     if width <= 0 or height <= 0:
@@ -1586,12 +1583,95 @@ import tempfile
 
 app = FastAPI(title="smart-crop API")
 
-MAX_UPLOAD_MB = int(os.getenv("SMARTCROP_MAX_UPLOAD_MB", "12" if os.getenv("RENDER") else "25"))
+def _in_production_mode() -> bool:
+    env = (
+        os.getenv("ENVIRONMENT")
+        or os.getenv("FASTAPI_ENV")
+        or os.getenv("PYTHON_ENV")
+        or os.getenv("ENV")
+        or ""
+    ).strip().lower()
+    return env in {"prod", "production"}
+
+
+def _parse_env_float(name: str, default: str, *, min_value: float, max_value: float | None = None) -> float:
+    raw_value = os.getenv(name, default)
+    try:
+        parsed = float(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be a number. Received: {raw_value!r}") from exc
+
+    if parsed < min_value:
+        raise RuntimeError(f"{name} must be >= {min_value}. Received: {raw_value!r}")
+
+    if max_value is not None and parsed > max_value:
+        raise RuntimeError(f"{name} must be <= {max_value}. Received: {raw_value!r}")
+
+    return parsed
+
+
+def _parse_env_int(name: str, default: str, *, min_value: int, max_value: int | None = None) -> int:
+    raw_value = os.getenv(name, default)
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError(f"{name} must be an integer. Received: {raw_value!r}") from exc
+
+    if parsed < min_value:
+        raise RuntimeError(f"{name} must be >= {min_value}. Received: {raw_value!r}")
+
+    if max_value is not None and parsed > max_value:
+        raise RuntimeError(f"{name} must be <= {max_value}. Received: {raw_value!r}")
+
+    return parsed
+
+
+def _validate_fastapi_startup_env() -> None:
+    errors: list[str] = []
+
+    required_numeric_env = {
+        "SMARTCROP_MAX_MP": ("20", "float", 1, 200),
+        "SMARTCROP_MAX_UPLOAD_MB": ("12" if os.getenv("RENDER") else "25", "int", 1, 200),
+        "SMARTCROP_UPLOAD_CHUNK_MB": ("2", "int", 1, 25),
+        "SMARTCROP_MAX_BATCH_FILES": ("8", "int", 1, 50),
+        "SMARTCROP_MAX_CONCURRENCY": ("1" if os.getenv("RENDER") else "2", "int", 1, 64),
+        "SMARTCROP_ACQUIRE_TIMEOUT_SECONDS": ("20", "float", 0.5, 300),
+    }
+
+    for name, (default, kind, min_value, max_value) in required_numeric_env.items():
+        try:
+            if kind == "int":
+                _parse_env_int(name, default, min_value=min_value, max_value=max_value)
+            else:
+                _parse_env_float(name, default, min_value=min_value, max_value=max_value)
+        except RuntimeError as exc:
+            errors.append(str(exc))
+
+    if _in_production_mode():
+        if not os.getenv("SMARTCROP_API_TOKEN"):
+            errors.append("SMARTCROP_API_TOKEN is required in production.")
+        if not os.getenv("SMARTCROP_FRONTEND_ORIGINS"):
+            errors.append("SMARTCROP_FRONTEND_ORIGINS is required in production.")
+
+    if errors:
+        joined = "\n- ".join(errors)
+        raise RuntimeError(
+            "Invalid FastAPI environment configuration:\n"
+            f"- {joined}\n"
+            "Fix environment variables before starting fastapi_service."
+        )
+
+
+_validate_fastapi_startup_env()
+
+MAX_DECODED_MP = _parse_env_float("SMARTCROP_MAX_MP", "20", min_value=1, max_value=200)
+MAX_UPLOAD_MB = _parse_env_int("SMARTCROP_MAX_UPLOAD_MB", "12" if os.getenv("RENDER") else "25", min_value=1, max_value=200)
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
-UPLOAD_READ_CHUNK_BYTES = int(os.getenv("SMARTCROP_UPLOAD_CHUNK_MB", "2")) * 1024 * 1024
-MAX_BATCH_FILES = int(os.getenv("SMARTCROP_MAX_BATCH_FILES", "8"))
-CROP_CONCURRENCY = max(1, int(os.getenv("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv("RENDER") else "2")))
-SLOT_ACQUIRE_TIMEOUT_SECONDS = float(os.getenv("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20"))
+UPLOAD_READ_CHUNK_MB = _parse_env_int("SMARTCROP_UPLOAD_CHUNK_MB", "2", min_value=1, max_value=25)
+UPLOAD_READ_CHUNK_BYTES = UPLOAD_READ_CHUNK_MB * 1024 * 1024
+MAX_BATCH_FILES = _parse_env_int("SMARTCROP_MAX_BATCH_FILES", "8", min_value=1, max_value=50)
+CROP_CONCURRENCY = _parse_env_int("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv("RENDER") else "2", min_value=1, max_value=64)
+SLOT_ACQUIRE_TIMEOUT_SECONDS = _parse_env_float("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20", min_value=0.5, max_value=300)
 PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true", "yes", "on"}
 SMARTCROP_API_TOKEN = os.getenv("SMARTCROP_API_TOKEN")
 
