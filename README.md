@@ -105,6 +105,7 @@ At minimum for local/prod you need:
 - `SCOPES`
 - `SHOPIFY_BILLING_TEST_MODE` (`false` in production; `true` in development/staging)
 - `SMARTCROP_API_URL` (URL of the deployed Smart Crop FastAPI service)
+- `SMARTCROP_API_TOKEN` (shared secret used by Node app and FastAPI service; sent as `X-SmartCrop-Token`)
 - `SMARTCROP_FRONTEND_ORIGINS` on the FastAPI service (comma-separated allowed frontend origins, for example `https://your-admin-app.onrender.com,http://localhost:3000`; do not rely on `*` in production)
 - `SMARTCROP_MAX_UPLOAD_MB` on FastAPI (max upload size per file, default `12` on Render)
 - `SMARTCROP_MAX_BATCH_FILES` on FastAPI (max number of files accepted by `/crop/batch`, default `8`)
@@ -151,6 +152,7 @@ A `render.yaml` is included to provision:
 - A Node web service (`smart-crop-app`)
 - Automatic `DATABASE_URL` wiring from the database to the app service
 - `SMARTCROP_API_URL` set for the Node service to reach the deployed FastAPI Smart Crop API
+- `SMARTCROP_API_TOKEN` set on **both** services to the same secret value
 
 The app startup command is:
 
@@ -161,6 +163,23 @@ npm run setup && npm run start
 This guarantees migrations are applied before serving traffic.
 
 > `SMARTCROP_API_URL` is required for Smart Crop and must point to your deployed FastAPI endpoint (prefer Render internal URL when both services are in the same Render workspace; otherwise use the external URL such as `https://smart-crop-api-f97p.onrender.com`).
+>
+> `SMARTCROP_API_TOKEN` must match across both services. FastAPI rejects missing tokens with `401` and invalid tokens with `403` on `/crop` and `/crop/batch`.
+
+### Smart Crop shared-secret rotation and rollback
+
+Use this procedure when rotating `SMARTCROP_API_TOKEN`:
+
+1. Generate a new high-entropy token (for example from your password manager).
+2. Update `SMARTCROP_API_TOKEN` on the **FastAPI service** in Render and deploy.
+3. Update `SMARTCROP_API_TOKEN` on the **Node app service** in Render and deploy.
+4. Verify uploads from the app succeed (single + batch crop).
+
+Rollback steps (if crop requests fail after rotation):
+
+1. Reapply the previous known-good token to **both** services.
+2. Redeploy both services.
+3. Confirm `/app/additional` Smart Crop checks recover and crop requests succeed.
 
 ## What to configure in the `.toml` files
 
