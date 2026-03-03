@@ -16,7 +16,6 @@ export const PLAN_CONFIG = {
 };
 
 export const FACE_DETECTION_METHODS = new Set([
-  "auto",
   "head_bust",
   "frontal",
   "profile",
