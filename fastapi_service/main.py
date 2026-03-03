@@ -3,6 +3,7 @@ import io
 import math
 import asyncio
 import json
+import secrets
 import zipfile
 import mimetypes
 import threading
@@ -1577,7 +1578,7 @@ def main():
     else:
         print("Failed to save cropped image.")
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
@@ -1592,6 +1593,7 @@ MAX_BATCH_FILES = int(os.getenv("SMARTCROP_MAX_BATCH_FILES", "8"))
 CROP_CONCURRENCY = max(1, int(os.getenv("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv("RENDER") else "2")))
 SLOT_ACQUIRE_TIMEOUT_SECONDS = float(os.getenv("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20"))
 PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true", "yes", "on"}
+SMARTCROP_API_TOKEN = os.getenv("SMARTCROP_API_TOKEN")
 
 _crop_request_semaphore = asyncio.Semaphore(CROP_CONCURRENCY)
 
@@ -1627,8 +1629,21 @@ def _preload_model_worker():
 
 @app.on_event("startup")
 async def startup_event():
+    if not SMARTCROP_API_TOKEN:
+        raise RuntimeError("SMARTCROP_API_TOKEN must be set for protected crop endpoints")
+
     if PRELOAD_MODEL:
         threading.Thread(target=_preload_model_worker, daemon=True).start()
+
+
+def require_smartcrop_token(
+    x_smartcrop_token: str | None = Header(default=None, alias="X-SmartCrop-Token"),
+):
+    if not x_smartcrop_token:
+        raise HTTPException(status_code=401, detail="Missing X-SmartCrop-Token header")
+
+    if not secrets.compare_digest(x_smartcrop_token, SMARTCROP_API_TOKEN):
+        raise HTTPException(status_code=403, detail="Invalid X-SmartCrop-Token")
 
 
 @asynccontextmanager
@@ -1686,6 +1701,7 @@ async def health():
 async def crop_endpoint(
     file: UploadFile = File(...),
     method: str = Form("auto"),
+    _: None = Depends(require_smartcrop_token),
 ):
     """
     Upload an image and return a cropped image.
@@ -1827,6 +1843,7 @@ async def crop_batch_endpoint(
     files: list[UploadFile] | None = File(default=None),
     file: list[UploadFile] | None = File(default=None),
     method: str = Form("auto"),
+    _: None = Depends(require_smartcrop_token),
 ):
     """
     Upload multiple images and return a ZIP containing cropped outputs in original formats.
