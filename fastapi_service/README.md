@@ -20,6 +20,15 @@ export SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000,https://your-frontend.e
 
 If this variable is not set, the API defaults to localhost development origins only (`http://localhost:3000` and `http://127.0.0.1:3000`).
 
+Set required shared-secret auth token:
+
+```
+export SMARTCROP_API_TOKEN="replace-with-a-long-random-secret"
+```
+
+`/crop` and `/crop/batch` require header `X-SmartCrop-Token` that exactly matches `SMARTCROP_API_TOKEN`.
+Missing header returns `401`; invalid token returns `403`.
+
 Image safety/performance limits (recommended):
 
 ```
@@ -43,7 +52,7 @@ Docker build:
 
 ```
 docker build -t smart-crop-fastapi .
-docker run -p 8000:8000 -e SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000,https://your-frontend.example.com" smart-crop-fastapi
+docker run -p 8000:8000 -e SMARTCROP_FRONTEND_ORIGINS="http://localhost:3000,https://your-frontend.example.com" -e SMARTCROP_API_TOKEN="replace-with-a-long-random-secret" smart-crop-fastapi
 ```
 
 The service exposes `/` (service info), `/health`, and a POST `/crop` endpoint that accepts a file upload.
@@ -54,12 +63,14 @@ Note: if you intentionally set `SMARTCROP_FRONTEND_ORIGINS="*"`, the service aut
 ## API
 
 ### `POST /crop`
+- Required header: `X-SmartCrop-Token: <SMARTCROP_API_TOKEN>`
 - Multipart form fields:
   - `file`: single image upload
   - `method`: one of `auto` (default), `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`
 - Response: cropped image stream in the **same format as the input file** (for example JPEG→JPEG, HEIC→HEIC).
 
 ### `POST /crop/batch`
+- Required header: `X-SmartCrop-Token: <SMARTCROP_API_TOKEN>`
 - Multipart form fields:
   - `files`: multiple image uploads (`files` can be repeated in form-data)
   - `method`: one of `auto` (default), `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`

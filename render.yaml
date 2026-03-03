@@ -30,6 +30,8 @@ services:
         sync: false
       - key: SMARTCROP_API_URL
         value: https://smart-crop-api-f97p.onrender.com
+      - key: SMARTCROP_API_TOKEN
+        sync: false
 
   - type: web
     name: smart-crop-api
@@ -52,3 +54,5 @@ services:
         value: "20"
       - key: SMARTCROP_PRELOAD_MODEL
         value: "1"
+      - key: SMARTCROP_API_TOKEN
+        sync: false

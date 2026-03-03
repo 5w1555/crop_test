@@ -7,6 +7,17 @@ const API_BASE =
   (process.env.RENDER ? DEFAULT_RENDER_API_URL : "http://localhost:8000");
 
 const NORMALIZED_API_BASE = API_BASE.replace(/\/+$/, "");
+const API_TOKEN = process.env.SMARTCROP_API_TOKEN;
+
+function getAuthHeaders() {
+  if (!API_TOKEN) {
+    throw new Error("SMARTCROP_API_TOKEN is required for Smart Crop API requests");
+  }
+
+  return {
+    "X-SmartCrop-Token": API_TOKEN,
+  };
+}
 
 export async function cropImage(file, options = {}) {
   const form = new FormData();
@@ -17,6 +28,7 @@ export async function cropImage(file, options = {}) {
   const res = await fetch(`${NORMALIZED_API_BASE}/crop`, {
     method: "POST",
     body: form,
+    headers: getAuthHeaders(),
   });
 
   if (!res.ok) {
@@ -39,6 +51,7 @@ export async function cropImages(files, options = {}) {
   const res = await fetch(`${NORMALIZED_API_BASE}/crop/batch`, {
     method: "POST",
     body: form,
+    headers: getAuthHeaders(),
   });
 
   if (!res.ok) {
@@ -51,7 +64,9 @@ export async function cropImages(files, options = {}) {
 
 export async function health() {
   try {
-    const res = await fetch(`${NORMALIZED_API_BASE}/health`);
+    const res = await fetch(`${NORMALIZED_API_BASE}/health`, {
+      headers: getAuthHeaders(),
+    });
     return res.ok;
   } catch {
     return false;
