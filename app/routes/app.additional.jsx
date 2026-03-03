@@ -64,19 +64,6 @@ function validateImageFile(file) {
   return null;
 }
 
-function showToast(appBridge, message, options) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  const toast = appBridge?.toast;
-  if (!toast || typeof toast.show !== "function") {
-    return;
-  }
-
-  toast.show(message, options);
-}
-
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const downloadToken = url.searchParams.get("download");
@@ -105,29 +92,55 @@ export const loader = async ({ request }) => {
   const apiHealthy = await health();
   const billingState = await getBillingState({ billing });
 
-  const productsResponse = await admin.graphql(
-    `#graphql
-    query CropReadyProducts {
-      products(first: 5, sortKey: UPDATED_AT, reverse: true) {
-        nodes {
-          id
-          title
-          handle
-          totalInventory
-          featuredMedia {
-            preview {
-              image {
-                url
-                altText
+  let products = [];
+  let productContextWarning = null;
+
+  try {
+    const productsResponse = await admin.graphql(
+      `#graphql
+      query CropReadyProducts {
+        products(first: 5, sortKey: UPDATED_AT, reverse: true) {
+          nodes {
+            id
+            title
+            handle
+            totalInventory
+            featuredMedia {
+              preview {
+                image {
+                  url
+                  altText
+                }
               }
             }
           }
         }
-      }
-    }`,
-  );
-  const productsJson = await productsResponse.json();
-  const products = productsJson.data?.products?.nodes || [];
+      }`,
+    );
+
+    const productsJson = await productsResponse.json();
+
+    if (Array.isArray(productsJson?.errors) && productsJson.errors.length > 0) {
+      console.error("Failed to load product context from Shopify Admin GraphQL", {
+        shop: session.shop,
+        requestId: productsResponse.headers.get("x-request-id") || null,
+        graphqlErrors: productsJson.errors,
+      });
+
+      productContextWarning = "Product context is temporarily unavailable.";
+    } else {
+      products = productsJson.data?.products?.nodes || [];
+    }
+  } catch (error) {
+    console.error("Failed to load product context from Shopify Admin GraphQL", {
+      shop: session.shop,
+      requestId: null,
+      graphqlErrors: null,
+      error: error instanceof Error ? error.message : String(error),
+    });
+
+    productContextWarning = "Product context is temporarily unavailable.";
+  }
 
   const planUsage = buildPlanView(
     await getShopPlanUsage(session.shop, {
@@ -140,6 +153,7 @@ export const loader = async ({ request }) => {
     planUsage,
     hasActiveProPlan: billingState.hasActivePayment,
     products,
+    productContextWarning,
   };
 };
 
@@ -210,7 +224,7 @@ export const action = async ({ request }) => {
 };
 
 export default function CropImagePage() {
-  const { apiHealthy, planUsage, hasActiveProPlan, products } = useLoaderData();
+  const { apiHealthy, planUsage, hasActiveProPlan, products, productContextWarning } = useLoaderData();
   const cropFetcher = useFetcher();
   const shopify = useAppBridge();
 
@@ -252,18 +266,15 @@ export default function CropImagePage() {
     }
 
     if (!cropFetcher.data.ok || !cropFetcher.data.downloadUrl) {
-      showToast(shopify, cropFetcher.data.error || "Unable to prepare download link.", {
+      showToast(cropFetcher.data.error || "Unable to prepare download link.", {
         isError: true,
       });
       return;
     }
 
     setDownloadLink(cropFetcher.data.downloadUrl);
-    showToast(
-      shopify,
-      `Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`,
-    );
-  }, [cropFetcher.data, cropFetcher.state, shopify]);
+    showToast(`Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`);
+  }, [cropFetcher.data, cropFetcher.state, showToast]);
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -335,7 +346,7 @@ export default function CropImagePage() {
 
     if (!hasValidSelection) {
       if (fileError) {
-        showToast(shopify, fileError, { isError: true });
+        showToast(fileError, { isError: true });
       }
       return;
     }
@@ -344,7 +355,7 @@ export default function CropImagePage() {
     const formData = new FormData(form);
 
     setDownloadLink("");
-    showToast(shopify, "Cropping started. Preparing direct download link...");
+    showToast("Cropping started. Preparing direct download link...");
 
     cropFetcher.submit(formData, {
       method: "post",
@@ -392,6 +403,7 @@ export default function CropImagePage() {
         <s-paragraph>
           Latest products from your catalog are shown below so you can quickly verify which assets should be exported and cropped.
         </s-paragraph>
+        {productContextWarning && <s-banner tone="warning">{productContextWarning}</s-banner>}
         {!products.length && <s-text tone="subdued">No products found yet.</s-text>}
         {products.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
