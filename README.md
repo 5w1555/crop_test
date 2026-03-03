@@ -201,6 +201,44 @@ Rollback steps (if crop requests fail after rotation):
 - `topics`: Event topic list.
 - `uri`: Relative endpoint in your app.
 
+### Compliance webhooks, retention, and deletion behavior
+
+Because this app is distributed via the Shopify App Store (`AppDistribution.AppStore`), it subscribes to the required compliance topics in `shopify.app.toml`:
+
+- `customers/data_request` → `/webhooks/customers/data_request`
+- `customers/redact` → `/webhooks/customers/redact`
+- `shop/redact` → `/webhooks/shop/redact`
+
+Webhook handlers are implemented under `app/routes/` and follow the same pattern as other webhook routes:
+
+- Verify the webhook with `authenticate.webhook(request)`.
+- Safely parse payload fields with defensive access (`?.` / type checks).
+- Return HTTP 200 quickly.
+- Log webhook request IDs (`x-request-id` or `x-shopify-webhook-id`) for auditability.
+
+#### Data retention/deletion policy in this app
+
+- **`app/uninstalled`**: deletes all local `Session` rows and any `ShopPlanUsage` record for the shop.
+- **`shop/redact`**: performs the same full shop-level cleanup (`Session` + `ShopPlanUsage`).
+- **`customers/redact` and `customers/data_request`**: currently audit-log requests and do not persist customer records locally.
+
+#### Manual cleanup procedures
+
+If you need to run explicit cleanup outside webhook delivery (for incident response or support operations), use Prisma Studio or SQL:
+
+```sql
+-- Remove all sessions and plan-usage state for one shop
+DELETE FROM "Session" WHERE shop = '<shop-domain.myshopify.com>';
+DELETE FROM "ShopPlanUsage" WHERE shop = '<shop-domain.myshopify.com>';
+```
+
+For full environment reset:
+
+```sql
+DELETE FROM "Session";
+DELETE FROM "ShopPlanUsage";
+```
+
 `[access_scopes]`
 - `scopes`: OAuth scopes your app requests.
 
