@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -211,6 +211,21 @@ export default function CropImagePage() {
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [downloadLink, setDownloadLink] = useState("");
 
+  const showToast = useCallback(
+    (message, options) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      if (!shopify || !shopify.toast || typeof shopify.toast.show !== "function") {
+        return;
+      }
+
+      shopify.toast.show(message, options);
+    },
+    [shopify],
+  );
+
   useEffect(() => {
     if (cropFetcher.state !== "idle") {
       setIsSubmittingDownload(true);
@@ -224,17 +239,17 @@ export default function CropImagePage() {
     }
 
     if (!cropFetcher.data.ok || !cropFetcher.data.downloadUrl) {
-      shopify.toast.show(cropFetcher.data.error || "Unable to prepare download link.", {
+      showToast(cropFetcher.data.error || "Unable to prepare download link.", {
         isError: true,
       });
       return;
     }
 
     setDownloadLink(cropFetcher.data.downloadUrl);
-    shopify.toast.show(
+    showToast(
       `Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`,
     );
-  }, [cropFetcher.data, cropFetcher.state, shopify.toast]);
+  }, [cropFetcher.data, cropFetcher.state, showToast]);
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -306,7 +321,7 @@ export default function CropImagePage() {
 
     if (!hasValidSelection) {
       if (fileError) {
-        shopify.toast.show(fileError, { isError: true });
+        showToast(fileError, { isError: true });
       }
       return;
     }
@@ -315,7 +330,7 @@ export default function CropImagePage() {
     const formData = new FormData(form);
 
     setDownloadLink("");
-    shopify.toast.show("Cropping started. Preparing direct download link...");
+    showToast("Cropping started. Preparing direct download link...");
 
     cropFetcher.submit(formData, {
       method: "post",
