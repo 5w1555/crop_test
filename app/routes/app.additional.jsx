@@ -64,6 +64,19 @@ function validateImageFile(file) {
   return null;
 }
 
+function showToast(appBridge, message, options) {
+  if (typeof window === "undefined") {
+    return;
+  }
+
+  const toast = appBridge?.toast;
+  if (!toast || typeof toast.show !== "function") {
+    return;
+  }
+
+  toast.show(message, options);
+}
+
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
   const downloadToken = url.searchParams.get("download");
@@ -224,17 +237,18 @@ export default function CropImagePage() {
     }
 
     if (!cropFetcher.data.ok || !cropFetcher.data.downloadUrl) {
-      shopify.toast.show(cropFetcher.data.error || "Unable to prepare download link.", {
+      showToast(shopify, cropFetcher.data.error || "Unable to prepare download link.", {
         isError: true,
       });
       return;
     }
 
     setDownloadLink(cropFetcher.data.downloadUrl);
-    shopify.toast.show(
+    showToast(
+      shopify,
       `Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`,
     );
-  }, [cropFetcher.data, cropFetcher.state, shopify.toast]);
+  }, [cropFetcher.data, cropFetcher.state, shopify]);
 
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
@@ -306,7 +320,7 @@ export default function CropImagePage() {
 
     if (!hasValidSelection) {
       if (fileError) {
-        shopify.toast.show(fileError, { isError: true });
+        showToast(shopify, fileError, { isError: true });
       }
       return;
     }
@@ -315,7 +329,7 @@ export default function CropImagePage() {
     const formData = new FormData(form);
 
     setDownloadLink("");
-    shopify.toast.show("Cropping started. Preparing direct download link...");
+    showToast(shopify, "Cropping started. Preparing direct download link...");
 
     cropFetcher.submit(formData, {
       method: "post",
