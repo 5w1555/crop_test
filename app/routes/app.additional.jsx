@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useFetcher, useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -223,6 +223,21 @@ export default function CropImagePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [downloadLink, setDownloadLink] = useState("");
+
+  const showToast = useCallback(
+    (message, options) => {
+      if (typeof window === "undefined") {
+        return;
+      }
+
+      if (!shopify || !shopify.toast || typeof shopify.toast.show !== "function") {
+        return;
+      }
+
+      shopify.toast.show(message, options);
+    },
+    [shopify],
+  );
 
   useEffect(() => {
     if (cropFetcher.state !== "idle") {
