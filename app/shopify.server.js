@@ -1,4 +1,5 @@
 import "@shopify/shopify-app-react-router/adapters/node";
+import "./config/env.server";
 import {
   ApiVersion,
   AppDistribution,
