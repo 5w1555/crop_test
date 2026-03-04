@@ -63,7 +63,7 @@ Note: if you intentionally set `SMARTCROP_FRONTEND_ORIGINS="*"`, the service aut
 
 - `insightface==0.7.3` + `onnxruntime==1.19.2` are pinned for CPU-only inference in this service.
 - Runtime provider expectation: InsightFace should resolve to `CPUExecutionProvider` only (no CUDA/TensorRT requirement in staging/production defaults).
-- `opencv-python==4.10.0.84`, `pillow==10.4.0`, `pillow-heif==0.18.0`, and `rawpy==0.23.1` are pinned as a tested image I/O stack for JPEG/PNG/HEIC/RAW input handling.
+- `opencv-python==4.10.0.84`, `pillow==10.4.0`, `pillow-heif==0.18.0`, and `rawpy==0.26.1` are pinned as a tested image I/O stack for JPEG/PNG/HEIC/RAW input handling.
 - Memory impact guidance:
   - face detection + decode paths can use significant temporary memory for high-megapixel images.
   - HEIC/RAW decode can be substantially heavier than JPEG/PNG due to larger intermediate buffers.
