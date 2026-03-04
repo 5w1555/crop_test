@@ -1709,8 +1709,11 @@ def _preload_model_worker():
 
 @app.on_event("startup")
 async def startup_event():
-    if not SMARTCROP_API_TOKEN:
+    if _in_production_mode() and not SMARTCROP_API_TOKEN:
         raise RuntimeError("SMARTCROP_API_TOKEN must be set for protected crop endpoints")
+
+    if not SMARTCROP_API_TOKEN:
+        print("Warning: SMARTCROP_API_TOKEN is not set; crop endpoints are running without token protection.")
 
     if PRELOAD_MODEL:
         threading.Thread(target=_preload_model_worker, daemon=True).start()
@@ -1719,6 +1722,9 @@ async def startup_event():
 def require_smartcrop_token(
     x_smartcrop_token: str | None = Header(default=None, alias="X-SmartCrop-Token"),
 ):
+    if not SMARTCROP_API_TOKEN:
+        return
+
     if not x_smartcrop_token:
         raise HTTPException(status_code=401, detail="Missing X-SmartCrop-Token header")
 
