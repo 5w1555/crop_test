@@ -1575,9 +1575,10 @@ def main():
     else:
         print("Failed to save cropped image.")
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Depends, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from fastapi.security import APIKeyHeader
 from starlette.background import BackgroundTask
 import tempfile
 
@@ -1674,6 +1675,9 @@ CROP_CONCURRENCY = _parse_env_int("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv(
 SLOT_ACQUIRE_TIMEOUT_SECONDS = _parse_env_float("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20", min_value=0.5, max_value=300)
 PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true", "yes", "on"}
 SMARTCROP_API_TOKEN = os.getenv("SMARTCROP_API_TOKEN")
+ALLOW_UNAUTHENTICATED_CROP = os.getenv("SMARTCROP_ALLOW_UNAUTHENTICATED", "0").lower() in {"1", "true", "yes", "on"}
+
+_smartcrop_token_header = APIKeyHeader(name="X-SmartCrop-Token", auto_error=False)
 
 _crop_request_semaphore = asyncio.Semaphore(CROP_CONCURRENCY)
 
@@ -1709,16 +1713,29 @@ def _preload_model_worker():
 
 @app.on_event("startup")
 async def startup_event():
-    if not SMARTCROP_API_TOKEN:
+    if _in_production_mode() and not SMARTCROP_API_TOKEN:
         raise RuntimeError("SMARTCROP_API_TOKEN must be set for protected crop endpoints")
+
+    if not SMARTCROP_API_TOKEN and not ALLOW_UNAUTHENTICATED_CROP:
+        print("Warning: SMARTCROP_API_TOKEN is not set; protected crop endpoints return 503 until configured.")
+    elif not SMARTCROP_API_TOKEN:
+        print("Warning: SMARTCROP_API_TOKEN is not set; crop endpoints are running without token protection.")
 
     if PRELOAD_MODEL:
         threading.Thread(target=_preload_model_worker, daemon=True).start()
 
 
 def require_smartcrop_token(
-    x_smartcrop_token: str | None = Header(default=None, alias="X-SmartCrop-Token"),
+    x_smartcrop_token: str | None = Security(_smartcrop_token_header),
 ):
+    if not SMARTCROP_API_TOKEN:
+        if ALLOW_UNAUTHENTICATED_CROP:
+            return
+        raise HTTPException(
+            status_code=503,
+            detail="SMARTCROP_API_TOKEN is not configured on the server.",
+        )
+
     if not x_smartcrop_token:
         raise HTTPException(status_code=401, detail="Missing X-SmartCrop-Token header")
 
