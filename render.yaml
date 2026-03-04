@@ -42,6 +42,8 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: python -m uvicorn main:app --host 0.0.0.0 --port $PORT
     envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.11
       - key: SMARTCROP_FRONTEND_ORIGINS
         value: https://smart-crop-app.onrender.com
       - key: SMARTCROP_MAX_UPLOAD_MB
