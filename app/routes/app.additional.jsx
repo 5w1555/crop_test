@@ -8,7 +8,7 @@ import { commitPlanUsage, getShopPlanUsage, reservePlanCapacity } from "../utils
 import { cropImages, health } from "../utils/smartCropClient";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
-import { prepareDownloadFromResponse, takePreparedDownload } from "../utils/preparedDownloads.server";
+import { prepareDownloadFromResponse } from "../utils/preparedDownloads.server";
 
 const CROP_METHODS = [
   {
@@ -65,29 +65,6 @@ function validateImageFile(file) {
 }
 
 export const loader = async ({ request }) => {
-  const url = new URL(request.url);
-  const downloadToken = url.searchParams.get("download");
-
-  if (downloadToken) {
-    const preparedDownload = takePreparedDownload(downloadToken);
-
-    if (!preparedDownload) {
-      return new Response("Download link is invalid or expired.", { status: 410 });
-    }
-
-    const response = new Response(preparedDownload.stream, {
-      status: 200,
-      headers: {
-        "content-type": preparedDownload.mimeType,
-        "content-disposition": `attachment; filename="${preparedDownload.filename}"`,
-      },
-    });
-
-    response.headers.set("cache-control", "no-store");
-
-    return response;
-  }
-
   const { session, admin, billing } = await authenticate.admin(request);
   const apiHealthy = await health();
   const billingState = await getBillingState({ billing });
@@ -205,7 +182,7 @@ export const action = async ({ request }) => {
     return Response.json({
       ok: true,
       filename: prepared.filename,
-      downloadUrl: `/app/additional?download=${prepared.token}`,
+      downloadUrl: `/download?token=${prepared.token}`,
       expiresInSeconds: prepared.expiresInSeconds,
     });
   } catch (error) {
