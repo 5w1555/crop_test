@@ -1,194 +1,166 @@
-# CONTEXT.md — crop_test (AI-Optimized Project Context)
+# CONTEXT.md — `fastapi_service/main.py` IA Execution Context
 
-## 1) What this repository is
+## Purpose
 
-`crop_test` is a **Shopify embedded app** (React Router + Shopify App Bridge web components) that lets merchants upload product images and run a **Smart Crop pipeline** backed by a separate **FastAPI** service.
-
-At runtime, the system is two services:
-
-1. **Node/React Router Shopify app** (this repo root)
-2. **Python FastAPI image service** (`fastapi_service/`)
-
-The app includes:
-- Shopify auth/session handling via `@shopify/shopify-app-react-router`
-- Prisma/PostgreSQL session + plan usage persistence
-- Plan gating (Free vs Pro) for image quota and available crop methods
-- Billing workflow for a Pro subscription
-- Batch crop + downloadable ZIP output
+This context is intentionally centered on **`fastapi_service/main.py`**, because that file contains the actual crop engine behavior exposed by the API.
+If another IA needs to change this system safely, treat `main.py` as the single source of truth.
 
 ---
 
-## 2) High-level architecture
+## 1) What `main.py` actually is
 
-### Node app responsibilities
-- Authenticate Shopify admin requests.
-- Show UI for upload/crop actions.
-- Validate plan limits and allowed methods.
-- Send images to FastAPI `/crop/batch`.
-- Persist monthly usage counters.
-- Expose a temporary download URL for the ZIP.
+`main.py` is not just routing glue; it combines:
+- app bootstrap + environment validation,
+- auth enforcement,
+- request-size + concurrency protection,
+- image decode/normalize/metadata handling,
+- face detection model lifecycle,
+- crop strategy implementations,
+- output format resolution and batch ZIP packaging.
 
-### FastAPI service responsibilities
-- Accept secure uploads (`X-SmartCrop-Token`).
-- Decode/normalize image formats (JPEG/PNG/HEIC/RAW support stack).
-- Run face-aware crop logic (InsightFace + fallbacks).
-- Return either single image (`/crop`) or ZIP (`/crop/batch`).
-- Enforce size/batch/concurrency safeguards.
+In other words, endpoint behavior and core image-processing logic are coupled in one file.
 
 ---
 
-## 3) Key user flow (upload → crop → download)
+## 2) High-confidence mental model (read in this order)
 
-1. Merchant opens `/app/additional`.
-2. Loader checks FastAPI health and billing/plan state and fetches recent Shopify products for context.
-3. User uploads one or more images and chooses a crop method.
-4. Action validates files and plan capacity.
-5. Node app posts files to FastAPI `/crop/batch`.
-6. On success, Node stores the ZIP temporarily and returns a short-lived download URL.
-7. User clicks download; loader streams stored ZIP to browser.
+For fastest understanding, read `main.py` in this sequence:
 
----
-
-## 4) Important routes and modules
-
-### Core app routes
-- `app/routes/app._index.jsx`: app home/checklist entry point.
-- `app/routes/app.additional.jsx`: main crop UI + loader/action logic.
-- `app/routes/app.billing.jsx`: start/cancel Pro subscription UI/flow.
-
-### Shopify app wiring
-- `app/shopify.server.js`: Shopify app config (API version, billing plan, session storage).
-- `app/routes.js`: filesystem route registration via `flatRoutes()`.
-
-### Smart crop integration
-- `app/utils/smartCropClient.js`: calls FastAPI `/health`, `/crop`, `/crop/batch`; enforces shared token.
-- `app/utils/preparedDownloads.server.js`: temporary server-side ZIP storage + tokenized download links.
-
-### Plan/billing domain
-- `app/utils/plan.js`: plan definitions and plan view shaping.
-- `app/utils/plan.server.js`: usage persistence and quota/method checks.
-- `app/utils/billing.js` + `app/utils/billing.server.js`: plan identifier + Shopify billing check/request helpers.
-
-### Persistence
-- `prisma/schema.prisma`:
-  - `Session` model for Shopify sessions.
-  - `ShopPlanUsage` model for monthly usage + current plan.
+1. **Env/config + startup guards**
+   - `_validate_fastapi_startup_env`, parsed constants (`MAX_*`, concurrency/timeouts), `startup_event`.
+2. **Security + backpressure**
+   - `require_smartcrop_token`, `crop_request_slot`, upload streaming/size checks.
+3. **I/O and format decisions**
+   - image read/resize limits, ICC/profile handling, output-format resolver, buffer serialization.
+4. **Crop orchestration**
+   - `run_crop_pipeline` and method dispatch.
+5. **Endpoints**
+   - `/crop` then `/crop/batch` and manifest/zip behavior.
+6. **Individual crop implementations**
+   - frontal/profile/auto/head_bust/chin/nose/below_lips/center_content.
 
 ---
 
-## 5) Data model and plan semantics
+## 3) Runtime path: request → result
 
-### `ShopPlanUsage`
-- One record per shop (`shop` is unique).
-- Tracks `plan`, `periodStart` (month start UTC), and `imagesProcessed`.
-- Automatically resets usage at month boundaries.
+### `POST /crop`
+1. Auth dependency validates `X-SmartCrop-Token` (unless token is unset in non-prod).
+2. Upload is streamed in chunks to temp file with rolling max-size enforcement.
+3. Concurrency slot is acquired (semaphore + timeout).
+4. `run_crop_pipeline(temp_path, method)` executes:
+   - read + normalize image,
+   - detect face/landmarks,
+   - select crop strategy,
+   - fallback if needed.
+5. Output format is resolved from input filename/content type.
+6. Response streams cropped image with attachment filename.
 
-### Plan behavior (as implemented)
-- Free plan has lower monthly limit and restricted methods.
-- Pro plan unlocks full face-detection method set and higher quota.
-- Effective plan resolution can derive from:
-  - active Shopify billing status,
-  - persisted plan,
-  - optional env override list (`PAID_PLAN_SHOPS`).
-
----
-
-## 6) Environment configuration
-
-### Node app required env
-- `SHOPIFY_API_KEY`
-- `SHOPIFY_API_SECRET`
-- `SHOPIFY_APP_URL`
-- `SCOPES`
-- `DATABASE_URL`
-- `DIRECT_DATABASE_URL`
-- `SMARTCROP_API_URL`
-
-### Node app recommended env
-- `SHOPIFY_BILLING_TEST_MODE`
-- `PAID_PLAN_SHOPS`
-- `SMARTCROP_API_TOKEN`
-
-### FastAPI env highlights
-- `SMARTCROP_API_TOKEN` (required for protected endpoints)
-- `SMARTCROP_FRONTEND_ORIGINS`
-- `SMARTCROP_MAX_UPLOAD_MB`
-- `SMARTCROP_MAX_BATCH_FILES`
-- `SMARTCROP_MAX_CONCURRENCY`
-- `SMARTCROP_ACQUIRE_TIMEOUT_SECONDS`
-- `SMARTCROP_PRELOAD_MODEL`
-- `SMARTCROP_MAX_MP`
+### `POST /crop/batch`
+- Same core pipeline per file.
+- Per-file failures are captured in `manifest.json` (not immediate total failure).
+- Entire request fails only if **all** files fail.
+- Output is a temporary ZIP with deduplicated output filenames.
 
 ---
 
-## 7) Build, run, and test commands
+## 4) Crop logic decision system (actual behavior)
 
-### Node app
-- Install: `npm ci`
-- Local dev (Shopify CLI): `npm run dev`
-- Build: `npm run build`
-- Start server: `npm run start`
-- DB setup/migrations: `npm run setup`
-- Lint: `npm run lint`
-- Typecheck: `npm run typecheck`
-- Unit tests: `npm test`
+Primary dispatcher: `run_crop_pipeline`.
 
-### FastAPI service
-- Install deps: `pip install -r fastapi_service/requirements.txt`
-- Run: `uvicorn main:app --host 0.0.0.0 --port 8000` (from `fastapi_service/`)
+- No face detected → `center_content_crop` fallback.
+- `method=head_bust` → dedicated head-bust flow.
+- `method=auto` → orientation-aware path:
+  - frontal candidate → `crop_frontal_image`
+  - otherwise profile/bbox fallback via `crop_profile_image`
+- Explicit methods:
+  - `frontal`, `profile`, `chin`, `nose`, `below_lips`, `center_content`
+- Unknown method → HTTP 400.
+- If method returns `None` unexpectedly, pipeline raises failure instead of returning broken output.
 
----
-
-## 8) Deployment shape
-
-`render.yaml` defines two Render services:
-- `smart-crop-app` (Node web service)
-- `smart-crop-api` (Python web service)
-
-Production assumptions:
-- PostgreSQL + Prisma migrations at startup (`npm run setup`).
-- App and API communicate over `SMARTCROP_API_URL` + shared token.
-- API uses conservative limits (`MAX_CONCURRENCY=1`, upload/batch caps) on free-tier infra.
+This keeps API behavior predictable even when landmarks are incomplete.
 
 ---
 
-## 9) Testing and quality signals
+## 5) Hard guardrails that protect production stability
 
-Existing tests are focused on core integration logic:
-- `app/utils/smartCropClient.test.js`: endpoint construction, auth header, error handling.
-- `app/utils/plan.server.test.js`: free-plan method restrictions and capacity checks.
-
-There are no broad e2e tests in this repo; most risk is concentrated in route action/loader behavior and API contract consistency.
-
----
-
-## 10) Operational gotchas (important for AI agents)
-
-1. **Token mismatch is a hard failure**
-   - Node sends `X-SmartCrop-Token`; FastAPI enforces exact match.
-2. **`SMARTCROP_API_TOKEN` is effectively required in Node**
-   - client helper throws if missing before outbound crop/health requests.
-3. **Plan gating can silently force method changes**
-   - Free plan requests may be coerced to fallback method.
-4. **Download links are ephemeral**
-   - ZIP downloads are tokenized and stored temporarily server-side.
-5. **Billing cancellation path uses test mode flag in code path**
-   - verify behavior before production billing changes.
+1. **Env validation before app starts**
+   - Numeric bounds are validated early; invalid config aborts startup.
+2. **Token security model**
+   - Missing header -> 401; invalid header -> 403.
+3. **Upload size controls**
+   - Streaming validation yields 413 for over-limit files.
+4. **Megapixel risk controls**
+   - Oversized decoded images are downscaled; extremely large sources can be hard-rejected.
+5. **Concurrency backpressure**
+   - Semaphore limit + acquisition timeout gives explicit 503 busy response.
+6. **Batch containment**
+   - max file count cap + per-file isolation in manifest.
 
 ---
 
-## 11) Suggested starting points for future contributors/agents
+## 6) Known structural issues in `main.py` (important for future IA work)
 
-If implementing feature work, inspect in this order:
-1. `app/routes/app.additional.jsx` (primary user workflow)
-2. `app/utils/smartCropClient.js` (service contract)
-3. `app/utils/plan.server.js` + `app/utils/plan.js` (gating/usage semantics)
-4. `fastapi_service/main.py` (actual crop behavior and limits)
-5. `prisma/schema.prisma` + migrations (persisted state impact)
+- The file is very large and mixes domains (API, model lifecycle, image math, serialization, ops controls).
+- Several defaults are operationally sensitive and easy to regress if changed without load testing.
+- There is legacy/noisy commentary at the bottom that does not influence runtime and can distract maintainers.
+- Some helper areas (format/metadata conversions) are subtle and should be changed with regression fixtures.
 
-If debugging production issues, first verify:
-- env var completeness/validity,
-- Node ↔ API token alignment,
-- API health endpoint reachability,
-- monthly usage counters for the shop,
-- Render service logs for timeout/memory saturation on batch requests.
+---
+
+## 7) Best course of action (recommended plan)
+
+### Phase 1 — Safety-first stabilization (do first)
+1. Build regression tests around `run_crop_pipeline` and `resolve_output_format` using small fixture images.
+2. Add endpoint tests for:
+   - token auth matrix (unset/missing/invalid/valid),
+   - 413 behavior for size limits,
+   - 503 behavior when concurrency slots are saturated,
+   - batch manifest semantics (partial success vs all-fail).
+3. Remove or relocate non-actionable trailing comments in `main.py` to reduce maintenance noise.
+
+### Phase 2 — Modularization without behavior change
+1. Extract modules while keeping API contract fixed:
+   - `config.py` (env parsing/validation),
+   - `auth.py` (token dependency),
+   - `limits.py` (upload + semaphore slot),
+   - `image_io.py` (decode/icc/format write),
+   - `crop_methods.py` (method implementations),
+   - `pipeline.py` (`run_crop_pipeline`).
+2. Keep `main.py` as thin composition layer (FastAPI wiring only).
+3. Run fixture parity tests before/after extraction to prove no output regressions.
+
+### Phase 3 — Operational hardening
+1. Add structured logging around each request stage (decode/detect/crop/serialize timings).
+2. Emit counters for method usage, fallback frequency, and failure reasons.
+3. Validate high-memory formats (HEIC/RAW) separately in staging with conservative limits.
+
+---
+
+## 8) IA guardrails for editing `main.py`
+
+- Never weaken token checks in production paths.
+- Preserve current HTTP semantics (400/401/403/413/503/500) unless a migration plan is documented.
+- Any change to default limits must include perf rationale and staging evidence.
+- Preserve filename + format expectations for both single and batch endpoints.
+- Do not merge refactors and behavior changes in one PR unless tests clearly isolate each risk.
+
+---
+
+## 9) Practical debugging checklist
+
+1. Confirm effective env values at startup (especially `SMARTCROP_*` limits and token).
+2. Reproduce on `/crop` with one known JPEG before touching batch.
+3. Validate whether failure is decode, face detect, crop method, or output serialization.
+4. For batch issues, inspect `manifest.json` first to classify per-file failures.
+5. For latency spikes, check image megapixels and concurrency slot contention before tuning model code.
+
+---
+
+## 10) Bottom line for another IA
+
+If you need to improve this system quickly and safely:
+- **test behavior first**,
+- **extract modules second**,
+- **tune limits/observability third**.
+
+That order gives the best chance of reducing risk while making `main.py` maintainable.
