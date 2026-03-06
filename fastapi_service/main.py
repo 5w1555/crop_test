@@ -12,6 +12,7 @@ import concurrent.futures
 import multiprocessing
 from pathlib import Path
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 
 import cv2
 import numpy as np
@@ -1787,6 +1788,13 @@ async def health():
 async def crop_endpoint(
     file: UploadFile = File(...),
     method: str = Form("auto"),
+    target_aspect_ratio: str | None = Form(default=None),
+    margin_top: float | None = Form(default=None),
+    margin_right: float | None = Form(default=None),
+    margin_bottom: float | None = Form(default=None),
+    margin_left: float | None = Form(default=None),
+    anchor_hint: str | None = Form(default=None),
+    filters: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
     """
@@ -1795,12 +1803,21 @@ async def crop_endpoint(
     """
     suffix = os.path.splitext(file.filename)[1] or ".jpg"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+    crop_options = parse_crop_options(
+        target_aspect_ratio=target_aspect_ratio,
+        margin_top=margin_top,
+        margin_right=margin_right,
+        margin_bottom=margin_bottom,
+        margin_left=margin_left,
+        anchor_hint=anchor_hint,
+        filters=filters,
+    )
     try:
         await _stream_upload_to_temp_file(file, tmp, file.filename or "upload")
         tmp.close()
 
         async with crop_request_slot():
-            cropped = run_crop_pipeline(tmp.name, method)
+            cropped = run_crop_pipeline(tmp.name, method, crop_options)
             output_info = resolve_output_format(file.filename, file.content_type)
             buf = image_to_buffer(cropped, output_info['pil_format'])
             headers = {
@@ -1820,6 +1837,7 @@ async def crop_endpoint(
 def run_crop_pipeline(
     temp_path: str,
     method: str,
+    crop_options,
 ):
     box, landmarks, cv_img, pil_img, metadata = get_face_and_landmarks(
         temp_path, conf_threshold=0.3
@@ -1860,7 +1878,204 @@ def run_crop_pipeline(
     if cropped is None:
         raise RuntimeError("Cropping failed")
 
+    return apply_crop_postprocessing(cropped, crop_options)
+
+
+@dataclass
+class CropOptions:
+    target_aspect_ratio: tuple[float, float] | None = None
+    margins: tuple[float, float, float, float] | None = None
+    anchor_hint: str | None = None
+    filters: list[str] | None = None
+
+
+def parse_crop_options(
+    target_aspect_ratio: str | None,
+    margin_top: float | None,
+    margin_right: float | None,
+    margin_bottom: float | None,
+    margin_left: float | None,
+    anchor_hint: str | None,
+    filters: str | None,
+) -> CropOptions:
+    ratio = _parse_aspect_ratio(target_aspect_ratio)
+    margins = _parse_margins(margin_top, margin_right, margin_bottom, margin_left)
+    normalized_anchor_hint = _normalize_anchor_hint(anchor_hint)
+    normalized_filters = _parse_filters(filters)
+    return CropOptions(
+        target_aspect_ratio=ratio,
+        margins=margins,
+        anchor_hint=normalized_anchor_hint,
+        filters=normalized_filters,
+    )
+
+
+def _parse_aspect_ratio(raw_ratio: str | None):
+    if not raw_ratio:
+        return None
+
+    cleaned = raw_ratio.strip()
+    if not cleaned:
+        return None
+
+    try:
+        if ":" in cleaned:
+            left, right = cleaned.split(":", 1)
+            width = float(left)
+            height = float(right)
+        else:
+            width = float(cleaned)
+            height = 1.0
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="target_aspect_ratio must be a number or W:H") from exc
+
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="target_aspect_ratio must be positive")
+
+    return width, height
+
+
+def _parse_margins(top, right, bottom, left):
+    values = (top, right, bottom, left)
+    if not any(value is not None for value in values):
+        return None
+
+    normalized = []
+    for value in values:
+        margin_value = 0.0 if value is None else float(value)
+        if margin_value < 0:
+            raise HTTPException(status_code=400, detail="Margins cannot be negative")
+        normalized.append(margin_value)
+
+    return tuple(normalized)
+
+
+def _normalize_anchor_hint(anchor_hint: str | None):
+    if not anchor_hint:
+        return None
+
+    value = anchor_hint.strip().lower()
+    allowed = {"auto", "top", "center", "bottom", "left", "right"}
+    if value not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"anchor_hint must be one of: {', '.join(sorted(allowed))}",
+        )
+    return value
+
+
+def _parse_filters(filters: str | None):
+    if not filters:
+        return None
+
+    parsed = filters
+    try:
+        if isinstance(filters, str) and filters.strip().startswith("["):
+            parsed = json.loads(filters)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="filters must be valid JSON when using array syntax") from exc
+
+    if isinstance(parsed, str):
+        normalized = [item.strip().lower() for item in parsed.split(",") if item.strip()]
+    elif isinstance(parsed, list):
+        normalized = [str(item).strip().lower() for item in parsed if str(item).strip()]
+    else:
+        raise HTTPException(status_code=400, detail="filters must be a comma-delimited string or JSON array")
+
+    if not normalized:
+        return None
+
+    allowed = {"sharpen", "detail", "grayscale"}
+    unsupported = [filter_name for filter_name in normalized if filter_name not in allowed]
+    if unsupported:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported filters: {', '.join(unsupported)}",
+        )
+
+    return normalized
+
+
+def apply_crop_postprocessing(cropped, crop_options: CropOptions):
+    if crop_options.target_aspect_ratio:
+        cropped = enforce_target_aspect_ratio(
+            cropped,
+            crop_options.target_aspect_ratio,
+            crop_options.anchor_hint,
+        )
+
+    if crop_options.margins:
+        cropped = apply_crop_margins(cropped, crop_options.margins)
+
+    if crop_options.filters:
+        cropped = apply_optional_filters(cropped, crop_options.filters)
+
     return cropped
+
+
+def enforce_target_aspect_ratio(image, ratio, anchor_hint):
+    width, height = image.size
+    target_width, target_height = ratio
+    target_ratio = target_width / target_height
+    current_ratio = width / height
+
+    if math.isclose(current_ratio, target_ratio, rel_tol=0.001):
+        return image
+
+    if current_ratio > target_ratio:
+        crop_width = max(1, int(round(height * target_ratio)))
+        crop_height = height
+    else:
+        crop_width = width
+        crop_height = max(1, int(round(width / target_ratio)))
+
+    left = _anchor_position(width, crop_width, anchor_hint, axis="x")
+    top = _anchor_position(height, crop_height, anchor_hint, axis="y")
+    return image.crop((left, top, left + crop_width, top + crop_height))
+
+
+def _anchor_position(total_size, crop_size, anchor_hint, axis):
+    max_offset = max(0, total_size - crop_size)
+    if max_offset == 0:
+        return 0
+
+    if axis == "x" and anchor_hint == "left":
+        return 0
+    if axis == "y" and anchor_hint == "top":
+        return 0
+    if axis == "x" and anchor_hint == "right":
+        return max_offset
+    if axis == "y" and anchor_hint == "bottom":
+        return max_offset
+    return max_offset // 2
+
+
+def apply_crop_margins(image, margins):
+    top, right, bottom, left = margins
+    width, height = image.size
+
+    left_px = int(round(left * width))
+    right_px = int(round(right * width))
+    top_px = int(round(top * height))
+    bottom_px = int(round(bottom * height))
+
+    new_left = min(max(0, left_px), width - 1)
+    new_top = min(max(0, top_px), height - 1)
+    new_right = max(new_left + 1, width - right_px)
+    new_bottom = max(new_top + 1, height - bottom_px)
+
+    return image.crop((new_left, new_top, new_right, new_bottom))
+
+
+def apply_optional_filters(image, filters):
+    for filter_name in filters:
+        if filter_name == "sharpen":
+            image = image.filter(ImageFilter.SHARPEN)
+        elif filter_name == "detail":
+            image = image.filter(ImageFilter.DETAIL)
+        elif filter_name == "grayscale":
+            image = ImageOps.grayscale(image).convert("RGB")
+    return image
 
 
 def resolve_output_format(filename: str | None, content_type: str | None):
@@ -1929,6 +2144,13 @@ async def crop_batch_endpoint(
     files: list[UploadFile] | None = File(default=None),
     file: list[UploadFile] | None = File(default=None),
     method: str = Form("auto"),
+    target_aspect_ratio: str | None = Form(default=None),
+    margin_top: float | None = Form(default=None),
+    margin_right: float | None = Form(default=None),
+    margin_bottom: float | None = Form(default=None),
+    margin_left: float | None = Form(default=None),
+    anchor_hint: str | None = Form(default=None),
+    filters: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
     """
@@ -1950,6 +2172,15 @@ async def crop_batch_endpoint(
     zip_tmp_path = zip_tmp.name
     zip_tmp.close()
     manifest = {"method": method, "processed": [], "failed": []}
+    crop_options = parse_crop_options(
+        target_aspect_ratio=target_aspect_ratio,
+        margin_top=margin_top,
+        margin_right=margin_right,
+        margin_bottom=margin_bottom,
+        margin_left=margin_left,
+        anchor_hint=anchor_hint,
+        filters=filters,
+    )
     used_output_names = {}
 
     try:
@@ -1967,7 +2198,7 @@ async def crop_batch_endpoint(
                         raise ValueError("Uploaded file is empty")
 
                     async with crop_request_slot():
-                        cropped = run_crop_pipeline(tmp.name, method)
+                        cropped = run_crop_pipeline(tmp.name, method, crop_options)
 
                     output_info = resolve_output_format(input_name, uploaded_file.content_type)
                     output_stem = Path(input_name).stem or f"image_{index}"
