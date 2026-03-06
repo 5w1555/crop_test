@@ -52,6 +52,33 @@ const CROP_METHODS = [
   },
 ];
 
+const PRESET_OPTIONS = [
+  {
+    value: "auto",
+    label: "Auto (recommended)",
+    method: "auto",
+    description: "Best default for mixed catalog uploads. The app decides the crop strategy.",
+  },
+  {
+    value: "portrait",
+    label: "Portrait",
+    method: "head_bust",
+    description: "Head-and-shoulders framing for model and profile imagery.",
+  },
+  {
+    value: "product",
+    label: "Product",
+    method: "auto",
+    description: "Balanced product framing with content fallback when no face is present.",
+  },
+  {
+    value: "square",
+    label: "Square",
+    method: "chin",
+    description: "Tighter composition preferred for social grids and square presentation.",
+  },
+];
+
 function validateImageFile(file) {
   if (!(file instanceof File)) {
     return "Please upload an image.";
@@ -210,7 +237,9 @@ export default function CropImagePage() {
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
-  const [selectedMethod, setSelectedMethod] = useState("auto");
+  const [selectedPreset, setSelectedPreset] = useState("auto");
+  const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] = useState(false);
+  const [advancedMethod, setAdvancedMethod] = useState("auto");
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [downloadLink, setDownloadLink] = useState("");
@@ -317,6 +346,13 @@ export default function CropImagePage() {
   };
 
   const hasValidSelection = selectedFiles.length > 0 && !fileError;
+  const selectedPresetConfig =
+    PRESET_OPTIONS.find((preset) => preset.value === selectedPreset) || PRESET_OPTIONS[0];
+  const selectedMethod = advancedMethodOverrideEnabled
+    ? advancedMethod
+    : selectedPresetConfig.method;
+  const selectedMethodDetails =
+    CROP_METHODS.find((method) => method.value === selectedMethod) || CROP_METHODS[0];
 
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
@@ -414,10 +450,9 @@ export default function CropImagePage() {
         )}
       </s-section>
 
-      <s-section heading="1) Upload and configure">
+      <s-section heading="Layer 1 — Zero friction">
         <s-paragraph>
-          Upload one or more images, choose one of the crop methods implemented by
-          <code> fastapi_service/main.py </code>, and run Smart Crop.
+          Drop images and run Smart Crop. For most stores, the default preset handles the batch without extra setup.
         </s-paragraph>
 
         <form
@@ -476,39 +511,76 @@ export default function CropImagePage() {
             </s-box>
             {fileError && <s-text tone="critical">{fileError}</s-text>}
 
-            <label htmlFor="method">Crop method</label>
-            <select
-              id="method"
-              name="method"
-              value={selectedMethod}
-              onChange={(event) => setSelectedMethod(event.currentTarget.value)}
-            >
-              {CROP_METHODS.filter((method) =>
-                planUsage.allowsFaceDetection ? true : method.value === "auto",
-              ).map((method) => (
-                <option key={method.value} value={method.value}>
-                  {method.value}
-                </option>
-              ))}
-            </select>
+            <s-box padding="base" border="base" borderRadius="base" background="bg-fill-secondary">
+              <s-stack direction="block" gap="small">
+                <s-text fontWeight="semibold">Layer 2 — Light control</s-text>
+                <s-text tone="subdued">
+                  Choose a preset in plain language. You can run immediately without touching advanced settings.
+                </s-text>
+                <label htmlFor="preset">Preset</label>
+                <select
+                  id="preset"
+                  value={selectedPreset}
+                  onChange={(event) => setSelectedPreset(event.currentTarget.value)}
+                >
+                  {PRESET_OPTIONS.map((preset) => (
+                    <option key={preset.value} value={preset.value}>
+                      {preset.label}
+                    </option>
+                  ))}
+                </select>
+                <s-text tone="subdued">{selectedPresetConfig.description}</s-text>
+              </s-stack>
+            </s-box>
+
+            <input type="hidden" name="method" value={selectedMethod} />
+
+            <details>
+              <summary>
+                <strong>Layer 3 — Power user (advanced)</strong>
+              </summary>
+              <s-box padding="base" border="base" borderRadius="base" style={{ marginTop: "12px" }}>
+                <s-stack direction="block" gap="small">
+                  <s-text tone="subdued">
+                    Fine-tune crop strategy for repeatable workflows. Collapsed by default to keep first-run setup simple.
+                  </s-text>
+                  <label>
+                    <input
+                      type="checkbox"
+                      checked={advancedMethodOverrideEnabled}
+                      onChange={(event) => setAdvancedMethodOverrideEnabled(event.currentTarget.checked)}
+                    />{" "}
+                    Override preset method
+                  </label>
+                  <label htmlFor="method">Crop method</label>
+                  <select
+                    id="method"
+                    value={advancedMethod}
+                    disabled={!advancedMethodOverrideEnabled}
+                    onChange={(event) => setAdvancedMethod(event.currentTarget.value)}
+                  >
+                    {CROP_METHODS.filter((method) =>
+                      planUsage.allowsFaceDetection ? true : method.value === "auto",
+                    ).map((method) => (
+                      <option key={method.value} value={method.value}>
+                        {method.value}
+                      </option>
+                    ))}
+                  </select>
+                </s-stack>
+              </s-box>
+            </details>
 
             <s-box padding="base" border="base" borderRadius="base">
-              <s-text fontWeight="semibold">Method details</s-text>
+              <s-text fontWeight="semibold">Current crop strategy</s-text>
               {!planUsage.allowsFaceDetection && (
                 <s-text tone="subdued">
                   Free plan requests are automatically processed with <code>center_content</code>.
                 </s-text>
               )}
-              <s-stack direction="block" gap="small">
-                {CROP_METHODS.map((method) => (
-                  <s-text
-                    key={method.value}
-                    tone={selectedMethod === method.value ? "success" : "subdued"}
-                  >
-                    <strong>{method.label}:</strong> {method.description}
-                  </s-text>
-                ))}
-              </s-stack>
+              <s-text>
+                <strong>{selectedMethodDetails.label}:</strong> {selectedMethodDetails.description}
+              </s-text>
             </s-box>
 
             <s-button
@@ -516,7 +588,7 @@ export default function CropImagePage() {
               disabled={!apiHealthy || !hasValidSelection || isSubmittingDownload}
               {...(isSubmittingDownload ? { loading: true } : {})}
             >
-              Crop images
+              Auto-crop images
             </s-button>
 
             {loadingText && <s-text>{loadingText}</s-text>}
@@ -533,7 +605,7 @@ export default function CropImagePage() {
         )}
       </s-section>
 
-      <s-section heading="2) Selected images">
+      <s-section heading="Selected images">
         {!selectedFiles.length && <s-paragraph>Select one or more images to continue.</s-paragraph>}
         {selectedFiles.length > 0 && (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
@@ -569,7 +641,7 @@ export default function CropImagePage() {
         )}
       </s-section>
 
-      <s-section heading="3) Cropped output">
+      <s-section heading="Cropped output">
         <s-paragraph>Status: {apiStatusText}</s-paragraph>
 
         <s-stack direction="inline" gap="base">
@@ -579,7 +651,9 @@ export default function CropImagePage() {
               setSelectedFiles([]);
               syncPreviewFile([]);
               setFileError("");
-              setSelectedMethod("auto");
+              setSelectedPreset("auto");
+              setAdvancedMethodOverrideEnabled(false);
+              setAdvancedMethod("auto");
               inputRef.current?.form?.reset();
               inputRef.current?.focus();
             }}
