@@ -156,6 +156,37 @@ test("cropImage appends optional crop contract fields", async () => {
   assert.equal(requestedOptions.body.get("filters"), '["detail","sharpen"]');
 });
 
+test("cropImages appends optional crop contract fields", async () => {
+  const { cropImages } = await loadClient("https://crop.example");
+
+  let requestedOptions;
+  global.fetch = async (_url, options) => {
+    requestedOptions = options;
+    return new Response("ok", { status: 200 });
+  };
+
+  const files = [new File(["image-bytes"], "avatar.png", { type: "image/png" })];
+  await cropImages(files, {
+    method: "profile",
+    targetAspectRatio: "1:1",
+    marginTop: 0.1,
+    marginRight: 0.1,
+    marginBottom: 0.1,
+    marginLeft: 0.1,
+    anchorHint: "center",
+    filters: "detail,sharpen",
+  });
+
+  assert.equal(requestedOptions.body.get("method"), "profile");
+  assert.equal(requestedOptions.body.get("target_aspect_ratio"), "1:1");
+  assert.equal(requestedOptions.body.get("margin_top"), "0.1");
+  assert.equal(requestedOptions.body.get("margin_right"), "0.1");
+  assert.equal(requestedOptions.body.get("margin_bottom"), "0.1");
+  assert.equal(requestedOptions.body.get("margin_left"), "0.1");
+  assert.equal(requestedOptions.body.get("anchor_hint"), "center");
+  assert.equal(requestedOptions.body.get("filters"), "detail,sharpen");
+});
+
 test("health returns true for ok responses and false when fetch fails", async () => {
   const { health } = await loadClient("https://crop.example");
 
