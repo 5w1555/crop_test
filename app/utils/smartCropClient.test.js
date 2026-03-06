@@ -126,6 +126,36 @@ test("cropImages posts repeated files form data to the batch crop endpoint", asy
   assert.equal(response.status, 200);
 });
 
+test("cropImage appends optional crop contract fields", async () => {
+  const { cropImage } = await loadClient("https://crop.example");
+
+  let requestedOptions;
+  global.fetch = async (_url, options) => {
+    requestedOptions = options;
+    return new Response("ok", { status: 200 });
+  };
+
+  const file = new File(["image-bytes"], "avatar.png", { type: "image/png" });
+  await cropImage(file, {
+    method: "auto",
+    targetAspectRatio: "4:5",
+    marginTop: 0.1,
+    marginRight: 0.2,
+    marginBottom: 0.05,
+    marginLeft: 0.15,
+    anchorHint: "top",
+    filters: ["detail", "sharpen"],
+  });
+
+  assert.equal(requestedOptions.body.get("target_aspect_ratio"), "4:5");
+  assert.equal(requestedOptions.body.get("margin_top"), "0.1");
+  assert.equal(requestedOptions.body.get("margin_right"), "0.2");
+  assert.equal(requestedOptions.body.get("margin_bottom"), "0.05");
+  assert.equal(requestedOptions.body.get("margin_left"), "0.15");
+  assert.equal(requestedOptions.body.get("anchor_hint"), "top");
+  assert.equal(requestedOptions.body.get("filters"), '["detail","sharpen"]');
+});
+
 test("health returns true for ok responses and false when fetch fails", async () => {
   const { health } = await loadClient("https://crop.example");
 
