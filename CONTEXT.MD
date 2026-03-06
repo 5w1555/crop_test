@@ -51,12 +51,14 @@ For fastest understanding, read `main.py` in this sequence:
    - read + normalize image,
    - detect face/landmarks,
    - select crop strategy,
-   - fallback if needed.
+   - fallback if needed,
+   - optional post-processing contract (`target_aspect_ratio`, margins, anchor, filters) when provided.
 5. Output format is resolved from input filename/content type.
 6. Response streams cropped image with attachment filename.
 
 ### `POST /crop/batch`
 - Same core pipeline per file.
+- Supports the same optional crop contract fields as `/crop` and applies them per output image.
 - Per-file failures are captured in `manifest.json` (not immediate total failure).
 - Entire request fails only if **all** files fail.
 - Output is a temporary ZIP with deduplicated output filenames.
@@ -76,6 +78,10 @@ Primary dispatcher: `run_crop_pipeline`.
   - `frontal`, `profile`, `chin`, `nose`, `below_lips`, `center_content`
 - Unknown method → HTTP 400.
 - If method returns `None` unexpectedly, pipeline raises failure instead of returning broken output.
+- After the method result, post-processing may be applied via `CropOptions`:
+  - aspect-ratio enforcement,
+  - margin cropping,
+  - optional lightweight filters.
 
 This keeps API behavior predictable even when landmarks are incomplete.
 
@@ -111,12 +117,13 @@ This keeps API behavior predictable even when landmarks are incomplete.
 
 ### Phase 1 — Safety-first stabilization (do first)
 1. Build regression tests around `run_crop_pipeline` and `resolve_output_format` using small fixture images.
-2. Add endpoint tests for:
+2. Add focused parser tests for `parse_crop_options` helpers (`_parse_aspect_ratio`, `_parse_margins`, `_normalize_anchor_hint`, `_parse_filters`) to lock request-contract behavior.
+3. Add endpoint tests for:
    - token auth matrix (unset/missing/invalid/valid),
    - 413 behavior for size limits,
    - 503 behavior when concurrency slots are saturated,
    - batch manifest semantics (partial success vs all-fail).
-3. Remove or relocate non-actionable trailing comments in `main.py` to reduce maintenance noise.
+4. Remove or relocate non-actionable trailing comments in `main.py` to reduce maintenance noise.
 
 ### Phase 2 — Modularization without behavior change
 1. Extract modules while keeping API contract fixed:

@@ -19,11 +19,37 @@ function getAuthHeaders() {
   };
 }
 
+function appendCropOptions(form, options = {}) {
+  if (options.method) form.append("method", String(options.method));
+  if (options.targetAspectRatio) {
+    form.append("target_aspect_ratio", String(options.targetAspectRatio));
+  }
+  if (options.anchorHint) form.append("anchor_hint", String(options.anchorHint));
+  if (options.filters) {
+    const filterValue = Array.isArray(options.filters)
+      ? JSON.stringify(options.filters)
+      : String(options.filters);
+    form.append("filters", filterValue);
+  }
+
+  const marginMap = {
+    marginTop: "margin_top",
+    marginRight: "margin_right",
+    marginBottom: "margin_bottom",
+    marginLeft: "margin_left",
+  };
+
+  Object.entries(marginMap).forEach(([optionKey, fieldName]) => {
+    if (options[optionKey] !== undefined && options[optionKey] !== null) {
+      form.append(fieldName, String(options[optionKey]));
+    }
+  });
+}
+
 export async function cropImage(file, options = {}) {
   const form = new FormData();
   form.append("file", file, file.name || "upload");
-
-  if (options.method) form.append("method", String(options.method));
+  appendCropOptions(form, options);
 
   const res = await fetch(`${NORMALIZED_API_BASE}/crop`, {
     method: "POST",
@@ -46,7 +72,7 @@ export async function cropImages(files, options = {}) {
     form.append("files", file, file.name || "upload");
   });
 
-  if (options.method) form.append("method", String(options.method));
+  appendCropOptions(form, options);
 
   const res = await fetch(`${NORMALIZED_API_BASE}/crop/batch`, {
     method: "POST",
