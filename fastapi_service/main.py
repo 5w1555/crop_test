@@ -2281,33 +2281,3 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("main:app", host="0.0.0.0", port=int(os.getenv("PORT", "8000")), reload=False)
-
-# Estimation of the time complexity:
-# The time complexity of the image processing functions is generally O(n), where n is the number of pixels in the image.
-# This is because most operations (like cropping, filtering, etc.) need to iterate over each pixel at least once.
-# The overall complexity of the batch processing function is O(m * n), where m is the number of images and n is the average number of pixels per image.
-# The threading and multiprocessing aspects can help reduce the wall-clock time but do not change the underlying complexity.
-# The actual time taken will depend on the size of the images, the number of images, and the specific operations being performed.
-# The performance can be further optimized by using libraries like OpenCV or Numba for specific operations.
-
-
-# Estimation of the marketability of the code:
-# The code is designed to be user-friendly and provides a GUI for image cropping and processing, which is a common requirement in various applications
-# However, the marketability of the code would depend on several factors:
-# 1. **User Interface**: The GUI is simple and functional, but it could be enhanced with more features and better aesthetics.
-# 2. **Performance**: The code uses threading and multiprocessing, which is good for performance, but the actual speed will depend on the hardware and image sizes.
-# 3. **Features**: The code includes several useful features like cropping, filtering, and background removal but may be too "complicated" for the average user.
-# 4. **Documentation**: The code is commented, but additional user documentation would be beneficial for non-technical users due to the heavy usage of many librairies.
-# 5. **Market Demand**: The demand for image processing tools is high, especially in fields like photography, e-commerce, and social medias.
-# 6. **Competition**: There are many existing tools and libraries for image processing, so the code would need to offer unique features or better performance to stand out.
-
-# Unique selling points could include:
-# - Easy-to-use GUI for batch processing
-# - Support for multiple cropping styles
-# - Integration with popular image formats (e.g., HEIC!)
-# - Customizable filters and effects
-# - Background removal with transparency
-# - Performance optimizations for large batches of images
-# - Compatibility with various platforms (Windows, macOS, Linux)
-# - Potential for cloud-based processing or integration with web services
-# - Ability to save and load presets for different cropping/filtering styles
