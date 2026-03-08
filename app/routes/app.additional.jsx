@@ -87,6 +87,153 @@ const PRESET_OPTIONS = [
   },
 ];
 
+const ANCHOR_HINT_OPTIONS = [
+  "auto",
+  "top",
+  "center",
+  "bottom",
+  "left",
+  "right",
+];
+const SUPPORTED_FILTERS = ["sharpen", "detail", "grayscale"];
+
+function normalizeTargetAspectRatio(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return { value: "", error: null };
+  }
+
+  const ratioParts = value.split(":");
+  if (ratioParts.length > 2) {
+    return {
+      value,
+      error:
+        "Aspect ratio must be a single number (e.g. 1.5) or W:H (e.g. 4:5).",
+    };
+  }
+
+  const parsedNumbers = ratioParts.map((part) => Number(part.trim()));
+  if (parsedNumbers.some((part) => !Number.isFinite(part) || part <= 0)) {
+    return {
+      value,
+      error: "Aspect ratio values must be positive numbers.",
+    };
+  }
+
+  return { value, error: null };
+}
+
+function normalizeMarginValue(rawValue, label) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return { value: "", numericValue: null, error: null };
+  }
+
+  const numericValue = Number(value);
+  if (!Number.isFinite(numericValue) || numericValue < 0) {
+    return {
+      value,
+      numericValue: null,
+      error: `${label} must be a non-negative number.`,
+    };
+  }
+
+  return { value, numericValue, error: null };
+}
+
+function normalizeAnchorHint(rawValue) {
+  const value = String(rawValue || "")
+    .trim()
+    .toLowerCase();
+  if (!value) {
+    return { value: "", error: null };
+  }
+
+  if (!ANCHOR_HINT_OPTIONS.includes(value)) {
+    return {
+      value,
+      error: `Anchor hint must be one of: ${ANCHOR_HINT_OPTIONS.join(", ")}.`,
+    };
+  }
+
+  return { value, error: null };
+}
+
+function normalizeFilters(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return { value: "", normalizedFilters: [], error: null };
+  }
+
+  const normalizedFilters = value
+    .split(",")
+    .map((entry) => entry.trim().toLowerCase())
+    .filter(Boolean);
+
+  const invalidFilters = normalizedFilters.filter(
+    (entry) => !SUPPORTED_FILTERS.includes(entry),
+  );
+
+  if (invalidFilters.length) {
+    return {
+      value,
+      normalizedFilters: [],
+      error: `Unsupported filters: ${invalidFilters.join(", ")}. Allowed: ${SUPPORTED_FILTERS.join(", ")}.`,
+    };
+  }
+
+  return { value, normalizedFilters, error: null };
+}
+
+function buildCropOptionPayload(values) {
+  const targetAspectRatio = normalizeTargetAspectRatio(
+    values.targetAspectRatio,
+  );
+  const marginTop = normalizeMarginValue(
+    values.marginTop,
+    "Top margin/padding",
+  );
+  const marginRight = normalizeMarginValue(
+    values.marginRight,
+    "Right margin/padding",
+  );
+  const marginBottom = normalizeMarginValue(
+    values.marginBottom,
+    "Bottom margin/padding",
+  );
+  const marginLeft = normalizeMarginValue(
+    values.marginLeft,
+    "Left margin/padding",
+  );
+  const anchorHint = normalizeAnchorHint(values.anchorHint);
+  const filters = normalizeFilters(values.filters);
+
+  const errors = [
+    targetAspectRatio.error,
+    marginTop.error,
+    marginRight.error,
+    marginBottom.error,
+    marginLeft.error,
+    anchorHint.error,
+    filters.error,
+  ].filter(Boolean);
+
+  return {
+    errors,
+    options: {
+      targetAspectRatio: targetAspectRatio.value || undefined,
+      marginTop: marginTop.numericValue,
+      marginRight: marginRight.numericValue,
+      marginBottom: marginBottom.numericValue,
+      marginLeft: marginLeft.numericValue,
+      anchorHint: anchorHint.value || undefined,
+      filters: filters.normalizedFilters.length
+        ? filters.normalizedFilters
+        : undefined,
+    },
+  };
+}
+
 function validateImageFile(file) {
   if (!(file instanceof File)) {
     return "Please upload an image.";
@@ -191,6 +338,20 @@ export const action = async ({ request }) => {
   }
 
   const method = String(formData.get("method") || "auto");
+  const optionPayload = buildCropOptionPayload({
+    targetAspectRatio: String(formData.get("target_aspect_ratio") || ""),
+    marginTop: String(formData.get("margin_top") || ""),
+    marginRight: String(formData.get("margin_right") || ""),
+    marginBottom: String(formData.get("margin_bottom") || ""),
+    marginLeft: String(formData.get("margin_left") || ""),
+    anchorHint: String(formData.get("anchor_hint") || ""),
+    filters: String(formData.get("filters") || ""),
+  });
+
+  if (optionPayload.errors.length) {
+    return { error: optionPayload.errors.join(" ") };
+  }
+
   const billingState = await getBillingState({ billing });
   const planReservation = await reservePlanCapacity({
     shop: session.shop,
@@ -206,6 +367,7 @@ export const action = async ({ request }) => {
   try {
     const response = await cropImages(files, {
       method: planReservation.effectiveMethod,
+      ...optionPayload.options,
     });
     const elapsedMs = Date.now() - startedAt;
 
@@ -330,6 +492,14 @@ export default function CropImagePage() {
   const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] =
     useState(false);
   const [advancedMethod, setAdvancedMethod] = useState("auto");
+  const [targetAspectRatioInput, setTargetAspectRatioInput] = useState("");
+  const [marginTopInput, setMarginTopInput] = useState("");
+  const [marginRightInput, setMarginRightInput] = useState("");
+  const [marginBottomInput, setMarginBottomInput] = useState("");
+  const [marginLeftInput, setMarginLeftInput] = useState("");
+  const [anchorHintInput, setAnchorHintInput] = useState("auto");
+  const [filtersInput, setFiltersInput] = useState("");
+  const [advancedValidationError, setAdvancedValidationError] = useState("");
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [isDownloadingZip, setIsDownloadingZip] = useState(false);
@@ -514,6 +684,27 @@ export default function CropImagePage() {
   const selectedMethodDetails =
     CROP_METHODS.find((method) => method.value === selectedMethod) ||
     CROP_METHODS[0];
+  const advancedOptionValidation = useMemo(
+    () =>
+      buildCropOptionPayload({
+        targetAspectRatio: targetAspectRatioInput,
+        marginTop: marginTopInput,
+        marginRight: marginRightInput,
+        marginBottom: marginBottomInput,
+        marginLeft: marginLeftInput,
+        anchorHint: anchorHintInput,
+        filters: filtersInput,
+      }),
+    [
+      anchorHintInput,
+      filtersInput,
+      marginBottomInput,
+      marginLeftInput,
+      marginRightInput,
+      marginTopInput,
+      targetAspectRatioInput,
+    ],
+  );
 
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
@@ -527,6 +718,48 @@ export default function CropImagePage() {
 
     const form = event.currentTarget;
     const formData = new FormData(form);
+
+    if (advancedOptionValidation.errors.length) {
+      const message = advancedOptionValidation.errors.join(" ");
+      setAdvancedValidationError(message);
+      showToast(message, { isError: true });
+      return;
+    }
+
+    setAdvancedValidationError("");
+    const { options } = advancedOptionValidation;
+    if (options.targetAspectRatio) {
+      formData.set("target_aspect_ratio", options.targetAspectRatio);
+    } else {
+      formData.delete("target_aspect_ratio");
+    }
+
+    const marginFields = [
+      ["margin_top", options.marginTop],
+      ["margin_right", options.marginRight],
+      ["margin_bottom", options.marginBottom],
+      ["margin_left", options.marginLeft],
+    ];
+
+    marginFields.forEach(([fieldName, value]) => {
+      if (typeof value === "number") {
+        formData.set(fieldName, String(value));
+      } else {
+        formData.delete(fieldName);
+      }
+    });
+
+    if (options.anchorHint) {
+      formData.set("anchor_hint", options.anchorHint);
+    } else {
+      formData.delete("anchor_hint");
+    }
+
+    if (options.filters?.length) {
+      formData.set("filters", options.filters.join(","));
+    } else {
+      formData.delete("filters");
+    }
 
     setDownloadLink("");
     setDownloadExpiryAt(null);
@@ -551,6 +784,37 @@ export default function CropImagePage() {
     selectedFileObjects.forEach((file) => formData.append("file", file));
     formData.append("method", selectedMethod);
 
+    if (advancedOptionValidation.errors.length) {
+      const message = advancedOptionValidation.errors.join(" ");
+      setAdvancedValidationError(message);
+      setDownloadFailureMessage(message);
+      return;
+    }
+
+    setAdvancedValidationError("");
+    const { options } = advancedOptionValidation;
+    if (options.targetAspectRatio) {
+      formData.append("target_aspect_ratio", options.targetAspectRatio);
+    }
+    if (typeof options.marginTop === "number") {
+      formData.append("margin_top", String(options.marginTop));
+    }
+    if (typeof options.marginRight === "number") {
+      formData.append("margin_right", String(options.marginRight));
+    }
+    if (typeof options.marginBottom === "number") {
+      formData.append("margin_bottom", String(options.marginBottom));
+    }
+    if (typeof options.marginLeft === "number") {
+      formData.append("margin_left", String(options.marginLeft));
+    }
+    if (options.anchorHint) {
+      formData.append("anchor_hint", options.anchorHint);
+    }
+    if (options.filters?.length) {
+      formData.append("filters", options.filters.join(","));
+    }
+
     setDownloadLink("");
     setDownloadExpiryAt(null);
     setDownloadFailureMessage("");
@@ -559,7 +823,12 @@ export default function CropImagePage() {
       method: "post",
       encType: "multipart/form-data",
     });
-  }, [cropFetcher, selectedFileObjects, selectedMethod]);
+  }, [
+    advancedOptionValidation,
+    cropFetcher,
+    selectedFileObjects,
+    selectedMethod,
+  ]);
 
   const handleDownloadClick = useCallback(async () => {
     if (!downloadLink || isDownloadingZip) {
@@ -972,6 +1241,106 @@ export default function CropImagePage() {
                       </option>
                     ))}
                   </select>
+
+                  <label htmlFor="target_aspect_ratio">
+                    Target aspect ratio
+                  </label>
+                  <input
+                    id="target_aspect_ratio"
+                    name="target_aspect_ratio"
+                    type="text"
+                    placeholder="e.g. 4:5 or 1.5"
+                    value={targetAspectRatioInput}
+                    onChange={(event) =>
+                      setTargetAspectRatioInput(event.currentTarget.value)
+                    }
+                  />
+
+                  <s-text tone="subdued">
+                    Margins/padding (non-negative numbers)
+                  </s-text>
+                  <s-stack direction="inline" gap="small" wrap>
+                    <input
+                      name="margin_top"
+                      aria-label="Top margin or padding"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Top"
+                      value={marginTopInput}
+                      onChange={(event) =>
+                        setMarginTopInput(event.currentTarget.value)
+                      }
+                    />
+                    <input
+                      name="margin_right"
+                      aria-label="Right margin or padding"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Right"
+                      value={marginRightInput}
+                      onChange={(event) =>
+                        setMarginRightInput(event.currentTarget.value)
+                      }
+                    />
+                    <input
+                      name="margin_bottom"
+                      aria-label="Bottom margin or padding"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Bottom"
+                      value={marginBottomInput}
+                      onChange={(event) =>
+                        setMarginBottomInput(event.currentTarget.value)
+                      }
+                    />
+                    <input
+                      name="margin_left"
+                      aria-label="Left margin or padding"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Left"
+                      value={marginLeftInput}
+                      onChange={(event) =>
+                        setMarginLeftInput(event.currentTarget.value)
+                      }
+                    />
+                  </s-stack>
+
+                  <label htmlFor="anchor_hint">Anchor hint</label>
+                  <select
+                    id="anchor_hint"
+                    name="anchor_hint"
+                    value={anchorHintInput}
+                    onChange={(event) =>
+                      setAnchorHintInput(event.currentTarget.value)
+                    }
+                  >
+                    {ANCHOR_HINT_OPTIONS.map((hint) => (
+                      <option key={hint} value={hint}>
+                        {hint}
+                      </option>
+                    ))}
+                  </select>
+
+                  <label htmlFor="filters">Optional filters</label>
+                  <input
+                    id="filters"
+                    name="filters"
+                    type="text"
+                    placeholder="comma-separated: sharpen, detail, grayscale"
+                    value={filtersInput}
+                    onChange={(event) =>
+                      setFiltersInput(event.currentTarget.value)
+                    }
+                  />
+
+                  {advancedValidationError && (
+                    <s-text tone="critical">{advancedValidationError}</s-text>
+                  )}
                 </s-stack>
               </s-box>
             </details>
@@ -1141,6 +1510,14 @@ export default function CropImagePage() {
               setSelectedPreset("auto");
               setAdvancedMethodOverrideEnabled(false);
               setAdvancedMethod("auto");
+              setTargetAspectRatioInput("");
+              setMarginTopInput("");
+              setMarginRightInput("");
+              setMarginBottomInput("");
+              setMarginLeftInput("");
+              setAnchorHintInput("auto");
+              setFiltersInput("");
+              setAdvancedValidationError("");
               inputRef.current?.form?.reset();
               inputRef.current?.focus();
             }}
