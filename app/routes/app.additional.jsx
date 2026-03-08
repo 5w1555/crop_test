@@ -4,7 +4,11 @@ import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { PLAN_CONFIG, buildPlanView } from "../utils/plan.js";
-import { commitPlanUsage, getShopPlanUsage, reservePlanCapacity } from "../utils/plan.server.js";
+import {
+  commitPlanUsage,
+  getShopPlanUsage,
+  reservePlanCapacity,
+} from "../utils/plan.server.js";
 import { cropImages, health } from "../utils/smartCropClient";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
@@ -48,7 +52,8 @@ const CROP_METHODS = [
   {
     value: "below_lips",
     label: "Below lips",
-    description: "Anchors composition just below the lips for tighter portrait crops.",
+    description:
+      "Anchors composition just below the lips for tighter portrait crops.",
   },
 ];
 
@@ -57,7 +62,8 @@ const PRESET_OPTIONS = [
     value: "auto",
     label: "Auto (recommended)",
     method: "auto",
-    description: "Best default for mixed catalog uploads. The app decides the crop strategy.",
+    description:
+      "Best default for mixed catalog uploads. The app decides the crop strategy.",
   },
   {
     value: "portrait",
@@ -69,13 +75,15 @@ const PRESET_OPTIONS = [
     value: "product",
     label: "Product",
     method: "auto",
-    description: "Balanced product framing with content fallback when no face is present.",
+    description:
+      "Balanced product framing with content fallback when no face is present.",
   },
   {
     value: "square",
     label: "Square",
     method: "chin",
-    description: "Tighter composition preferred for social grids and square presentation.",
+    description:
+      "Tighter composition preferred for social grids and square presentation.",
   },
 ];
 
@@ -125,11 +133,14 @@ export const loader = async ({ request }) => {
     const productsJson = await productsResponse.json();
 
     if (Array.isArray(productsJson?.errors) && productsJson.errors.length > 0) {
-      console.error("Failed to load product context from Shopify Admin GraphQL", {
-        shop: session.shop,
-        requestId: productsResponse.headers.get("x-request-id") || null,
-        graphqlErrors: productsJson.errors,
-      });
+      console.error(
+        "Failed to load product context from Shopify Admin GraphQL",
+        {
+          shop: session.shop,
+          requestId: productsResponse.headers.get("x-request-id") || null,
+          graphqlErrors: productsJson.errors,
+        },
+      );
 
       productContextWarning = "Product context is temporarily unavailable.";
     } else {
@@ -173,7 +184,9 @@ export const action = async ({ request }) => {
   for (const file of files) {
     const fileError = validateImageFile(file);
     if (fileError) {
-      return { error: `${file instanceof File ? file.name : "File"}: ${fileError}` };
+      return {
+        error: `${file instanceof File ? file.name : "File"}: ${fileError}`,
+      };
     }
   }
 
@@ -191,7 +204,9 @@ export const action = async ({ request }) => {
   }
 
   try {
-    const response = await cropImages(files, { method: planReservation.effectiveMethod });
+    const response = await cropImages(files, {
+      method: planReservation.effectiveMethod,
+    });
     const elapsedMs = Date.now() - startedAt;
 
     const metadataFromHeaders = (() => {
@@ -251,7 +266,8 @@ export const action = async ({ request }) => {
       };
     })();
 
-    const mimeType = response.headers.get("content-type") || "application/octet-stream";
+    const mimeType =
+      response.headers.get("content-type") || "application/octet-stream";
     if (!mimeType.includes("application/zip")) {
       const bodyPreview = (await response.text()).slice(0, 500);
       console.error("Smart Crop API returned unexpected content type", {
@@ -273,7 +289,9 @@ export const action = async ({ request }) => {
       expiresInSeconds: prepared.expiresInSeconds,
       metadata: {
         ...metadataFromHeaders,
-        elapsedSeconds: Number((metadataFromHeaders.elapsedMs / 1000).toFixed(2)),
+        elapsedSeconds: Number(
+          (metadataFromHeaders.elapsedMs / 1000).toFixed(2),
+        ),
       },
     });
   } catch (error) {
@@ -292,7 +310,13 @@ export const action = async ({ request }) => {
 };
 
 export default function CropImagePage() {
-  const { apiHealthy, planUsage, hasActiveProPlan, products, productContextWarning } = useLoaderData();
+  const {
+    apiHealthy,
+    planUsage,
+    hasActiveProPlan,
+    products,
+    productContextWarning,
+  } = useLoaderData();
   const cropFetcher = useFetcher();
   const shopify = useAppBridge();
 
@@ -303,7 +327,8 @@ export default function CropImagePage() {
   const [selectedFileObjects, setSelectedFileObjects] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
   const [selectedPreset, setSelectedPreset] = useState("auto");
-  const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] = useState(false);
+  const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] =
+    useState(false);
   const [advancedMethod, setAdvancedMethod] = useState("auto");
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
@@ -319,7 +344,11 @@ export default function CropImagePage() {
         return;
       }
 
-      if (!shopify || !shopify.toast || typeof shopify.toast.show !== "function") {
+      if (
+        !shopify ||
+        !shopify.toast ||
+        typeof shopify.toast.show !== "function"
+      ) {
         return;
       }
 
@@ -331,8 +360,14 @@ export default function CropImagePage() {
   useEffect(() => {
     if (cropFetcher.state !== "idle") {
       setProgressStep("uploading");
-      const processingTimer = setTimeout(() => setProgressStep("processing"), 500);
-      const preparingTimer = setTimeout(() => setProgressStep("preparing_zip"), 1400);
+      const processingTimer = setTimeout(
+        () => setProgressStep("processing"),
+        500,
+      );
+      const preparingTimer = setTimeout(
+        () => setProgressStep("preparing_zip"),
+        1400,
+      );
 
       return () => {
         clearTimeout(processingTimer);
@@ -374,7 +409,9 @@ export default function CropImagePage() {
         ? new Date(Date.now() + cropFetcher.data.expiresInSeconds * 1000)
         : null,
     );
-    showToast(`Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`);
+    showToast(
+      `Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`,
+    );
   }, [cropFetcher.data, cropFetcher.state, showToast]);
 
   const apiStatusText = useMemo(() => {
@@ -410,7 +447,10 @@ export default function CropImagePage() {
       processedCount,
       failedCount,
       elapsedLabel:
-        elapsedSeconds ?? (typeof elapsedMs === "number" ? Number((elapsedMs / 1000).toFixed(2)) : null),
+        elapsedSeconds ??
+        (typeof elapsedMs === "number"
+          ? Number((elapsedMs / 1000).toFixed(2))
+          : null),
     };
   }, [cropFetcher.data]);
 
@@ -442,7 +482,6 @@ export default function CropImagePage() {
     });
   };
 
-
   const syncSelectedFiles = (nextFiles) => {
     const nextError = nextFiles
       .map((file) => {
@@ -467,12 +506,14 @@ export default function CropImagePage() {
 
   const hasValidSelection = selectedFiles.length > 0 && !fileError;
   const selectedPresetConfig =
-    PRESET_OPTIONS.find((preset) => preset.value === selectedPreset) || PRESET_OPTIONS[0];
+    PRESET_OPTIONS.find((preset) => preset.value === selectedPreset) ||
+    PRESET_OPTIONS[0];
   const selectedMethod = advancedMethodOverrideEnabled
     ? advancedMethod
     : selectedPresetConfig.method;
   const selectedMethodDetails =
-    CROP_METHODS.find((method) => method.value === selectedMethod) || CROP_METHODS[0];
+    CROP_METHODS.find((method) => method.value === selectedMethod) ||
+    CROP_METHODS[0];
 
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
@@ -500,7 +541,9 @@ export default function CropImagePage() {
 
   const submitGenerationRequest = useCallback(() => {
     if (!selectedFileObjects.length) {
-      setDownloadFailureMessage("Re-run requires the original files. Please upload again.");
+      setDownloadFailureMessage(
+        "Re-run requires the original files. Please upload again.",
+      );
       return;
     }
 
@@ -558,7 +601,8 @@ export default function CropImagePage() {
       const blob = await response.blob();
       const blobUrl = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
-      const contentDisposition = response.headers.get("content-disposition") || "";
+      const contentDisposition =
+        response.headers.get("content-disposition") || "";
       const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
 
       anchor.href = blobUrl;
@@ -569,7 +613,9 @@ export default function CropImagePage() {
       URL.revokeObjectURL(blobUrl);
     } catch (error) {
       const message =
-        error instanceof Error ? error.message : "Unable to download ZIP. Please regenerate and try again.";
+        error instanceof Error
+          ? error.message
+          : "Unable to download ZIP. Please regenerate and try again.";
       setDownloadFailureMessage(message);
       showToast(message, { isError: true });
     } finally {
@@ -589,8 +635,77 @@ export default function CropImagePage() {
     });
   }, [downloadExpiryAt]);
 
+  const getInventoryStatus = useCallback((inventoryCount) => {
+    return Number(inventoryCount) > 0 ? "In stock" : "Out of stock";
+  }, []);
+
   return (
     <s-page heading="Crop Images">
+      <style>{`
+        .responsive-table {
+          width: 100%;
+          border-collapse: collapse;
+        }
+
+        .responsive-table th,
+        .responsive-table td {
+          padding: 8px;
+          border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+          vertical-align: top;
+        }
+
+        .responsive-card-list {
+          display: none;
+        }
+
+        .responsive-card {
+          border: 1px solid rgba(0, 0, 0, 0.08);
+          border-radius: 8px;
+          padding: 12px;
+          background: var(--p-color-bg-surface, #fff);
+        }
+
+        .responsive-card-primary {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) auto auto;
+          gap: 8px;
+          align-items: start;
+          margin-bottom: 8px;
+        }
+
+        .responsive-card-name {
+          overflow-wrap: anywhere;
+          font-weight: 600;
+        }
+
+        .responsive-card-metadata {
+          display: grid;
+          gap: 4px;
+        }
+
+        .responsive-card-row {
+          display: flex;
+          justify-content: space-between;
+          gap: 8px;
+        }
+
+        @media (max-width: 900px) {
+          .responsive-table {
+            display: none;
+          }
+
+          .responsive-card-list {
+            display: grid;
+            gap: 12px;
+          }
+        }
+
+        @media (max-width: 480px) {
+          .responsive-card-primary {
+            grid-template-columns: minmax(0, 1fr);
+          }
+        }
+      `}</style>
       <s-section heading="FastAPI connection">
         <s-banner tone={apiHealthy ? "success" : "critical"}>
           {apiHealthy
@@ -599,27 +714,29 @@ export default function CropImagePage() {
         </s-banner>
       </s-section>
 
-
       <s-section heading="Plan and usage">
         <s-stack direction="block" gap="small">
           <s-text>
             Current plan: <strong>{planUsage.label}</strong>
           </s-text>
           <s-text>
-            Usage this month: {planUsage.imagesProcessed}/{planUsage.monthlyImageLimit} images
+            Usage this month: {planUsage.imagesProcessed}/
+            {planUsage.monthlyImageLimit} images
           </s-text>
-          <s-text>
-            Remaining this month: {planUsage.remaining} images
-          </s-text>
+          <s-text>Remaining this month: {planUsage.remaining} images</s-text>
           {!planUsage.allowsFaceDetection && (
             <s-banner tone="info">
               Free plan uses content-aware crop only ({" "}
-              <code>center_content</code>). Face detection methods are available on the {PLAN_CONFIG.pro.label} plan (€{PLAN_CONFIG.pro.monthlyPriceEur}/month).
+              <code>center_content</code>). Face detection methods are available
+              on the {PLAN_CONFIG.pro.label} plan (€
+              {PLAN_CONFIG.pro.monthlyPriceEur}/month).
             </s-banner>
           )}
           {!hasActiveProPlan && (
             <s-text>
-              To activate {PRO_PLAN}, open <s-link href="/app/billing">Billing</s-link> and approve the Shopify app subscription.
+              To activate {PRO_PLAN}, open{" "}
+              <s-link href="/app/billing">Billing</s-link> and approve the
+              Shopify app subscription.
             </s-text>
           )}
         </s-stack>
@@ -627,45 +744,94 @@ export default function CropImagePage() {
 
       <s-section heading="Shopify product context">
         <s-paragraph>
-          Latest products from your catalog are shown below so you can quickly verify which assets should be exported and cropped.
+          Latest products from your catalog are shown below so you can quickly
+          verify which assets should be exported and cropped.
         </s-paragraph>
-        {productContextWarning && <s-banner tone="warning">{productContextWarning}</s-banner>}
-        {!products.length && <s-text tone="subdued">No products found yet.</s-text>}
+        {productContextWarning && (
+          <s-banner tone="warning">{productContextWarning}</s-banner>
+        )}
+        {!products.length && (
+          <s-text tone="subdued">No products found yet.</s-text>
+        )}
         {products.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th align="left">Title</th>
-                <th align="left">Handle</th>
-                <th align="right">Inventory</th>
-                <th align="left">Featured image</th>
-              </tr>
-            </thead>
-            <tbody>
-              {products.map((product) => (
-                <tr key={product.id}>
-                  <td>{product.title}</td>
-                  <td>{product.handle}</td>
-                  <td align="right">{product.totalInventory ?? 0}</td>
-                  <td>
-                    {product.featuredMedia?.preview?.image ? (
-                      <a href={product.featuredMedia.preview.image.url} target="_blank" rel="noreferrer">
-                        View image
-                      </a>
-                    ) : (
-                      <span>—</span>
-                    )}
-                  </td>
+          <>
+            <table className="responsive-table">
+              <thead>
+                <tr>
+                  <th align="left">Title</th>
+                  <th align="left">Status</th>
+                  <th align="left">Handle</th>
+                  <th align="right">Inventory</th>
+                  <th align="left">Featured image</th>
                 </tr>
+              </thead>
+              <tbody>
+                {products.map((product) => (
+                  <tr key={product.id}>
+                    <td>{product.title}</td>
+                    <td>{getInventoryStatus(product.totalInventory)}</td>
+                    <td>{product.handle}</td>
+                    <td align="right">{product.totalInventory ?? 0}</td>
+                    <td>
+                      {product.featuredMedia?.preview?.image ? (
+                        <a
+                          href={product.featuredMedia.preview.image.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View image
+                        </a>
+                      ) : (
+                        <span>—</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="responsive-card-list">
+              {products.map((product) => (
+                <div key={`${product.id}-card`} className="responsive-card">
+                  <div className="responsive-card-primary">
+                    <span className="responsive-card-name">
+                      {product.title}
+                    </span>
+                    <span>
+                      {(product.totalInventory ?? 0).toString()} in stock
+                    </span>
+                    <span>{getInventoryStatus(product.totalInventory)}</span>
+                  </div>
+                  <div className="responsive-card-metadata">
+                    <div className="responsive-card-row">
+                      <span>Handle</span>
+                      <span>{product.handle}</span>
+                    </div>
+                    <div className="responsive-card-row">
+                      <span>Featured image</span>
+                      {product.featuredMedia?.preview?.image ? (
+                        <a
+                          href={product.featuredMedia.preview.image.url}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          View image
+                        </a>
+                      ) : (
+                        <span>—</span>
+                      )}
+                    </div>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
       </s-section>
 
       <s-section heading="Layer 1 — Zero friction">
         <s-paragraph>
-          Drop images and run Smart Crop. For most stores, the default preset handles the batch without extra setup.
+          Drop images and run Smart Crop. For most stores, the default preset
+          handles the batch without extra setup.
         </s-paragraph>
 
         <form
@@ -716,7 +882,9 @@ export default function CropImagePage() {
                   accept="image/*"
                   required
                   onChange={(event) => {
-                    const nextFiles = Array.from(event.currentTarget.files ?? []);
+                    const nextFiles = Array.from(
+                      event.currentTarget.files ?? [],
+                    );
                     syncSelectedFiles(nextFiles);
                   }}
                 />
@@ -724,17 +892,25 @@ export default function CropImagePage() {
             </s-box>
             {fileError && <s-text tone="critical">{fileError}</s-text>}
 
-            <s-box padding="base" border="base" borderRadius="base" background="bg-fill-secondary">
+            <s-box
+              padding="base"
+              border="base"
+              borderRadius="base"
+              background="bg-fill-secondary"
+            >
               <s-stack direction="block" gap="small">
                 <s-text fontWeight="semibold">Layer 2 — Light control</s-text>
                 <s-text tone="subdued">
-                  Choose a preset in plain language. You can run immediately without touching advanced settings.
+                  Choose a preset in plain language. You can run immediately
+                  without touching advanced settings.
                 </s-text>
                 <label htmlFor="preset">Preset</label>
                 <select
                   id="preset"
                   value={selectedPreset}
-                  onChange={(event) => setSelectedPreset(event.currentTarget.value)}
+                  onChange={(event) =>
+                    setSelectedPreset(event.currentTarget.value)
+                  }
                 >
                   {PRESET_OPTIONS.map((preset) => (
                     <option key={preset.value} value={preset.value}>
@@ -742,7 +918,9 @@ export default function CropImagePage() {
                     </option>
                   ))}
                 </select>
-                <s-text tone="subdued">{selectedPresetConfig.description}</s-text>
+                <s-text tone="subdued">
+                  {selectedPresetConfig.description}
+                </s-text>
               </s-stack>
             </s-box>
 
@@ -752,16 +930,26 @@ export default function CropImagePage() {
               <summary>
                 <strong>Layer 3 — Power user (advanced)</strong>
               </summary>
-              <s-box padding="base" border="base" borderRadius="base" style={{ marginTop: "12px" }}>
+              <s-box
+                padding="base"
+                border="base"
+                borderRadius="base"
+                style={{ marginTop: "12px" }}
+              >
                 <s-stack direction="block" gap="small">
                   <s-text tone="subdued">
-                    Fine-tune crop strategy for repeatable workflows. Collapsed by default to keep first-run setup simple.
+                    Fine-tune crop strategy for repeatable workflows. Collapsed
+                    by default to keep first-run setup simple.
                   </s-text>
                   <label>
                     <input
                       type="checkbox"
                       checked={advancedMethodOverrideEnabled}
-                      onChange={(event) => setAdvancedMethodOverrideEnabled(event.currentTarget.checked)}
+                      onChange={(event) =>
+                        setAdvancedMethodOverrideEnabled(
+                          event.currentTarget.checked,
+                        )
+                      }
                     />{" "}
                     Override preset method
                   </label>
@@ -770,10 +958,14 @@ export default function CropImagePage() {
                     id="method"
                     value={advancedMethod}
                     disabled={!advancedMethodOverrideEnabled}
-                    onChange={(event) => setAdvancedMethod(event.currentTarget.value)}
+                    onChange={(event) =>
+                      setAdvancedMethod(event.currentTarget.value)
+                    }
                   >
                     {CROP_METHODS.filter((method) =>
-                      planUsage.allowsFaceDetection ? true : method.value === "auto",
+                      planUsage.allowsFaceDetection
+                        ? true
+                        : method.value === "auto",
                     ).map((method) => (
                       <option key={method.value} value={method.value}>
                         {method.value}
@@ -788,17 +980,21 @@ export default function CropImagePage() {
               <s-text fontWeight="semibold">Current crop strategy</s-text>
               {!planUsage.allowsFaceDetection && (
                 <s-text tone="subdued">
-                  Free plan requests are automatically processed with <code>center_content</code>.
+                  Free plan requests are automatically processed with{" "}
+                  <code>center_content</code>.
                 </s-text>
               )}
               <s-text>
-                <strong>{selectedMethodDetails.label}:</strong> {selectedMethodDetails.description}
+                <strong>{selectedMethodDetails.label}:</strong>{" "}
+                {selectedMethodDetails.description}
               </s-text>
             </s-box>
 
             <s-button
               type="submit"
-              disabled={!apiHealthy || !hasValidSelection || isSubmittingDownload}
+              disabled={
+                !apiHealthy || !hasValidSelection || isSubmittingDownload
+              }
               {...(isSubmittingDownload ? { loading: true } : {})}
             >
               Auto-crop images
@@ -809,7 +1005,12 @@ export default function CropImagePage() {
         </form>
 
         {resultSummary && (
-          <s-box padding="base" border="base" borderRadius="base" background="bg-fill-secondary">
+          <s-box
+            padding="base"
+            border="base"
+            borderRadius="base"
+            background="bg-fill-secondary"
+          >
             <s-stack direction="block" gap="small">
               <s-text fontWeight="semibold">Batch result summary</s-text>
               <s-text>Requested: {resultSummary.requestedCount}</s-text>
@@ -826,10 +1027,13 @@ export default function CropImagePage() {
           <s-banner tone="success">
             <s-stack direction="block" gap="small">
               <s-text>
-                Your ZIP is ready. Click to download the complete processed batch.
+                Your ZIP is ready. Click to download the complete processed
+                batch.
               </s-text>
               {downloadExpiryLabel && (
-                <s-text tone="subdued">Expires at: {downloadExpiryLabel}</s-text>
+                <s-text tone="subdued">
+                  Expires at: {downloadExpiryLabel}
+                </s-text>
               )}
               <s-stack direction="inline" gap="small">
                 <s-button
@@ -859,26 +1063,52 @@ export default function CropImagePage() {
       </s-section>
 
       <s-section heading="Selected images">
-        {!selectedFiles.length && <s-paragraph>Select one or more images to continue.</s-paragraph>}
+        {!selectedFiles.length && (
+          <s-paragraph>Select one or more images to continue.</s-paragraph>
+        )}
         {selectedFiles.length > 0 && (
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <thead>
-              <tr>
-                <th align="left">Name</th>
-                <th align="left">MIME type</th>
-                <th align="right">Size (KB)</th>
-              </tr>
-            </thead>
-            <tbody>
-              {selectedFiles.map((file) => (
-                <tr key={`${file.name}-${file.sizeBytes}`}>
-                  <td>{file.name}</td>
-                  <td>{file.mimeType}</td>
-                  <td align="right">{(file.sizeBytes / 1024).toFixed(1)}</td>
+          <>
+            <table className="responsive-table">
+              <thead>
+                <tr>
+                  <th align="left">Name</th>
+                  <th align="left">Status</th>
+                  <th align="left">MIME type</th>
+                  <th align="right">Size (KB)</th>
                 </tr>
+              </thead>
+              <tbody>
+                {selectedFiles.map((file) => (
+                  <tr key={`${file.name}-${file.sizeBytes}`}>
+                    <td>{file.name}</td>
+                    <td>Ready</td>
+                    <td>{file.mimeType}</td>
+                    <td align="right">{(file.sizeBytes / 1024).toFixed(1)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="responsive-card-list">
+              {selectedFiles.map((file) => (
+                <div
+                  key={`${file.name}-${file.sizeBytes}-card`}
+                  className="responsive-card"
+                >
+                  <div className="responsive-card-primary">
+                    <span className="responsive-card-name">{file.name}</span>
+                    <span>{(file.sizeBytes / 1024).toFixed(1)} KB</span>
+                    <span>Ready</span>
+                  </div>
+                  <div className="responsive-card-metadata">
+                    <div className="responsive-card-row">
+                      <span>MIME type</span>
+                      <span>{file.mimeType}</span>
+                    </div>
+                  </div>
+                </div>
               ))}
-            </tbody>
-          </table>
+            </div>
+          </>
         )}
 
         {previewFile && (
@@ -917,7 +1147,10 @@ export default function CropImagePage() {
           >
             Reset selection
           </s-button>
-          <s-text tone="subdued">Downloads use a generated link once the FastAPI batch ZIP has been fully prepared.</s-text>
+          <s-text tone="subdued">
+            Downloads use a generated link once the FastAPI batch ZIP has been
+            fully prepared.
+          </s-text>
         </s-stack>
       </s-section>
     </s-page>
