@@ -959,7 +959,11 @@ export default function CropImagePage() {
       document.body.appendChild(anchor);
       anchor.click();
       anchor.remove();
-      URL.revokeObjectURL(blobUrl);
+      // Delay URL cleanup so browsers have enough time to read the Blob.
+      // Revoking immediately can result in incomplete/corrupted downloads.
+      setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 60_000);
     } catch (error) {
       const message =
         error instanceof Error
