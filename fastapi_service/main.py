@@ -2268,7 +2268,12 @@ async def crop_batch_endpoint(
             except Exception:
                 pass
 
-    headers = {"Content-Disposition": 'attachment; filename="cropped_batch.zip"'}
+    headers = {
+        "Content-Disposition": 'attachment; filename="cropped_batch.zip"',
+        "Cache-Control": "no-store, no-transform",
+        "X-Content-Type-Options": "nosniff",
+        "Content-Length": str(os.path.getsize(zip_tmp_path)),
+    }
     return StreamingResponse(
         zip_stream,
         media_type="application/zip",
