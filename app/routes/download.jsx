@@ -29,13 +29,23 @@ export const loader = async ({ request }) => {
     );
   }
 
+  const headers = new Headers({
+    "content-type": preparedDownload.mimeType,
+    "content-disposition": `attachment; filename="${preparedDownload.filename}"`,
+    "cache-control": "no-store",
+  });
+
+  if (preparedDownload.contentEncoding) {
+    headers.set("content-encoding", preparedDownload.contentEncoding);
+  }
+
+  if (Number.isFinite(preparedDownload.contentLength)) {
+    headers.set("content-length", String(preparedDownload.contentLength));
+  }
+
   return new Response(preparedDownload.stream, {
     status: 200,
-    headers: {
-      "content-type": preparedDownload.mimeType,
-      "content-disposition": `attachment; filename="${preparedDownload.filename}"`,
-      "cache-control": "no-store",
-    },
+    headers,
   });
 };
 
