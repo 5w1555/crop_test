@@ -163,6 +163,7 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { session, billing } = await authenticate.admin(request);
+  const startedAt = Date.now();
 
   const formData = await request.formData();
   const files = formData.getAll("file");
@@ -191,6 +192,65 @@ export const action = async ({ request }) => {
 
   try {
     const response = await cropImages(files, { method: planReservation.effectiveMethod });
+    const elapsedMs = Date.now() - startedAt;
+
+    const metadataFromHeaders = (() => {
+      const parseNumeric = (value) => {
+        if (value === null || value === undefined || value === "") return null;
+        const parsed = Number(value);
+        return Number.isFinite(parsed) ? parsed : null;
+      };
+
+      const parseManifestHeader = () => {
+        const possibleManifestHeaders = [
+          "x-smartcrop-manifest",
+          "x-manifest",
+          "x-crop-manifest",
+        ];
+
+        for (const headerName of possibleManifestHeaders) {
+          const rawValue = response.headers.get(headerName);
+          if (!rawValue) continue;
+
+          try {
+            const parsed = JSON.parse(rawValue);
+            if (parsed && typeof parsed === "object") {
+              return parsed;
+            }
+          } catch {
+            // ignore malformed manifest headers
+          }
+        }
+
+        return null;
+      };
+
+      const manifest = parseManifestHeader();
+      const processedCount =
+        parseNumeric(response.headers.get("x-processed-count")) ??
+        parseNumeric(manifest?.processed_count) ??
+        parseNumeric(manifest?.processedCount) ??
+        files.length;
+      const failedCount =
+        parseNumeric(response.headers.get("x-failed-count")) ??
+        parseNumeric(manifest?.failed_count) ??
+        parseNumeric(manifest?.failedCount) ??
+        Math.max(files.length - processedCount, 0);
+      const elapsedFromManifest =
+        parseNumeric(response.headers.get("x-elapsed-ms")) ??
+        parseNumeric(manifest?.elapsed_ms) ??
+        parseNumeric(manifest?.elapsedMs) ??
+        null;
+
+      return {
+        requestedCount: files.length,
+        processedCount,
+        failedCount,
+        elapsedMs: elapsedFromManifest ?? elapsedMs,
+        manifest,
+      };
+    })();
+
     const mimeType = response.headers.get("content-type") || "application/octet-stream";
     if (!mimeType.includes("application/zip")) {
       const bodyPreview = (await response.text()).slice(0, 500);
@@ -211,6 +271,10 @@ export const action = async ({ request }) => {
       filename: prepared.filename,
       downloadUrl: `/download?token=${prepared.token}`,
       expiresInSeconds: prepared.expiresInSeconds,
+      metadata: {
+        ...metadataFromHeaders,
+        elapsedSeconds: Number((metadataFromHeaders.elapsedMs / 1000).toFixed(2)),
+      },
     });
   } catch (error) {
     console.error("Crop action failed", {
@@ -243,6 +307,7 @@ export default function CropImagePage() {
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [downloadLink, setDownloadLink] = useState("");
+  const [progressStep, setProgressStep] = useState("idle");
 
   const showToast = useCallback(
     (message, options) => {
@@ -258,6 +323,26 @@ export default function CropImagePage() {
     },
     [shopify],
   );
+
+  useEffect(() => {
+    if (cropFetcher.state !== "idle") {
+      setProgressStep("uploading");
+      const processingTimer = setTimeout(() => setProgressStep("processing"), 500);
+      const preparingTimer = setTimeout(() => setProgressStep("preparing_zip"), 1400);
+
+      return () => {
+        clearTimeout(processingTimer);
+        clearTimeout(preparingTimer);
+      };
+    }
+
+    if (cropFetcher.data?.ok && cropFetcher.data.downloadUrl) {
+      setProgressStep("ready");
+      return;
+    }
+
+    setProgressStep("idle");
+  }, [cropFetcher.data, cropFetcher.state]);
 
   useEffect(() => {
     if (cropFetcher.state !== "idle") {
@@ -288,12 +373,36 @@ export default function CropImagePage() {
   }, [apiHealthy]);
 
   const loadingText = useMemo(() => {
-    if (!isSubmittingDownload) return "";
+    const progressTextByStep = {
+      idle: "",
+      uploading: "Uploading images…",
+      processing: "Processing crops…",
+      preparing_zip: "Preparing ZIP…",
+      ready: "Ready to download.",
+    };
 
-    if (isSubmittingDownload) {
-      return "Uploading…";
-    }
-  }, [isSubmittingDownload]);
+    return progressTextByStep[progressStep] || "";
+  }, [progressStep]);
+
+  const resultSummary = useMemo(() => {
+    if (!cropFetcher.data?.ok || !cropFetcher.data?.metadata) return null;
+
+    const {
+      requestedCount = 0,
+      processedCount = 0,
+      failedCount = 0,
+      elapsedMs,
+      elapsedSeconds,
+    } = cropFetcher.data.metadata;
+
+    return {
+      requestedCount,
+      processedCount,
+      failedCount,
+      elapsedLabel:
+        elapsedSeconds ?? (typeof elapsedMs === "number" ? Number((elapsedMs / 1000).toFixed(2)) : null),
+    };
+  }, [cropFetcher.data]);
 
   useEffect(() => {
     return () => {
@@ -594,6 +703,20 @@ export default function CropImagePage() {
             {loadingText && <s-text>{loadingText}</s-text>}
           </s-stack>
         </form>
+
+        {resultSummary && (
+          <s-box padding="base" border="base" borderRadius="base" background="bg-fill-secondary">
+            <s-stack direction="block" gap="small">
+              <s-text fontWeight="semibold">Batch result summary</s-text>
+              <s-text>Requested: {resultSummary.requestedCount}</s-text>
+              <s-text>Processed: {resultSummary.processedCount}</s-text>
+              <s-text>Failed: {resultSummary.failedCount}</s-text>
+              {resultSummary.elapsedLabel !== null && (
+                <s-text>Elapsed: {resultSummary.elapsedLabel}s</s-text>
+              )}
+            </s-stack>
+          </s-box>
+        )}
 
         {downloadLink && (
           <s-banner tone="success">
