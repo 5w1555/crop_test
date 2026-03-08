@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useFetcher, useLoaderData, useRouteError } from "react-router";
+import { useLoaderData, useRouteError } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
@@ -12,7 +12,6 @@ import {
 import { cropImages, health } from "../utils/smartCropClient";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
-import { prepareDownloadFromResponse } from "../utils/preparedDownloads.server";
 
 const CROP_METHODS = [
   {
@@ -444,18 +443,35 @@ export const action = async ({ request }) => {
 
     await commitPlanUsage({ shop: session.shop, imageCount: files.length });
 
-    const prepared = await prepareDownloadFromResponse(response);
-    return Response.json({
-      ok: true,
-      filename: prepared.filename,
-      downloadUrl: `/download?token=${prepared.token}`,
-      expiresInSeconds: prepared.expiresInSeconds,
-      metadata: {
+    const headers = new Headers({
+      "content-type": response.headers.get("content-type") || "application/zip",
+      "content-disposition":
+        response.headers.get("content-disposition") ||
+        'attachment; filename="cropped_batch.zip"',
+      "cache-control": "no-store",
+    });
+
+    const contentEncoding = response.headers.get("content-encoding");
+    if (contentEncoding) {
+      headers.set("content-encoding", contentEncoding);
+    }
+
+    const contentLength = response.headers.get("content-length");
+    if (contentLength) {
+      headers.set("content-length", contentLength);
+    }
+
+    headers.set(
+      "x-crop-summary",
+      JSON.stringify({
         ...metadataFromHeaders,
-        elapsedSeconds: Number(
-          (metadataFromHeaders.elapsedMs / 1000).toFixed(2),
-        ),
-      },
+        elapsedSeconds: Number((metadataFromHeaders.elapsedMs / 1000).toFixed(2)),
+      }),
+    );
+
+    return new Response(response.body, {
+      status: response.status,
+      headers,
     });
   } catch (error) {
     console.error("Crop action failed", {
@@ -480,7 +496,6 @@ export default function CropImagePage() {
     products,
     productContextWarning,
   } = useLoaderData();
-  const cropFetcher = useFetcher();
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
@@ -488,7 +503,6 @@ export default function CropImagePage() {
   const preferencesHydratedRef = useRef(false);
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
-  const [selectedFileObjects, setSelectedFileObjects] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
   const [selectedPreset, setSelectedPreset] = useState("auto");
   const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] =
@@ -504,11 +518,6 @@ export default function CropImagePage() {
   const [advancedValidationError, setAdvancedValidationError] = useState("");
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
-  const [isDownloadingZip, setIsDownloadingZip] = useState(false);
-  const [downloadLink, setDownloadLink] = useState("");
-  const [downloadExpiryAt, setDownloadExpiryAt] = useState(null);
-  const [downloadFailureMessage, setDownloadFailureMessage] = useState("");
-  const [progressStep, setProgressStep] = useState("idle");
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -607,102 +616,10 @@ export default function CropImagePage() {
     [shopify],
   );
 
-  useEffect(() => {
-    if (cropFetcher.state !== "idle") {
-      setProgressStep("uploading");
-      const processingTimer = setTimeout(
-        () => setProgressStep("processing"),
-        500,
-      );
-      const preparingTimer = setTimeout(
-        () => setProgressStep("preparing_zip"),
-        1400,
-      );
-
-      return () => {
-        clearTimeout(processingTimer);
-        clearTimeout(preparingTimer);
-      };
-    }
-
-    if (cropFetcher.data?.ok && cropFetcher.data.downloadUrl) {
-      setProgressStep("ready");
-      return;
-    }
-
-    setProgressStep("idle");
-  }, [cropFetcher.data, cropFetcher.state]);
-
-  useEffect(() => {
-    if (cropFetcher.state !== "idle") {
-      setIsSubmittingDownload(true);
-      return;
-    }
-
-    setIsSubmittingDownload(false);
-
-    if (!cropFetcher.data) {
-      return;
-    }
-
-    if (!cropFetcher.data.ok || !cropFetcher.data.downloadUrl) {
-      showToast(cropFetcher.data.error || "Unable to prepare download link.", {
-        isError: true,
-      });
-      return;
-    }
-
-    setDownloadFailureMessage("");
-    setDownloadLink(cropFetcher.data.downloadUrl);
-    setDownloadExpiryAt(
-      typeof cropFetcher.data.expiresInSeconds === "number"
-        ? new Date(Date.now() + cropFetcher.data.expiresInSeconds * 1000)
-        : null,
-    );
-    showToast(
-      `Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`,
-    );
-  }, [cropFetcher.data, cropFetcher.state, showToast]);
-
   const apiStatusText = useMemo(() => {
     if (apiHealthy) return "Connected";
     return "FastAPI service is unreachable";
   }, [apiHealthy]);
-
-  const loadingText = useMemo(() => {
-    const progressTextByStep = {
-      idle: "",
-      uploading: "Uploading images…",
-      processing: "Processing crops…",
-      preparing_zip: "Preparing ZIP…",
-      ready: "Ready to download.",
-    };
-
-    return progressTextByStep[progressStep] || "";
-  }, [progressStep]);
-
-  const resultSummary = useMemo(() => {
-    if (!cropFetcher.data?.ok || !cropFetcher.data?.metadata) return null;
-
-    const {
-      requestedCount = 0,
-      processedCount = 0,
-      failedCount = 0,
-      elapsedMs,
-      elapsedSeconds,
-    } = cropFetcher.data.metadata;
-
-    return {
-      requestedCount,
-      processedCount,
-      failedCount,
-      elapsedLabel:
-        elapsedSeconds ??
-        (typeof elapsedMs === "number"
-          ? Number((elapsedMs / 1000).toFixed(2))
-          : null),
-    };
-  }, [cropFetcher.data]);
 
   useEffect(() => {
     return () => {
@@ -742,7 +659,6 @@ export default function CropImagePage() {
 
     setFileError(nextError || "");
     syncPreviewFile(nextError ? [] : nextFiles);
-    setSelectedFileObjects(nextError ? [] : nextFiles);
     setSelectedFiles(
       nextError
         ? []
@@ -786,20 +702,17 @@ export default function CropImagePage() {
     ],
   );
 
-  const handleDownloadSubmit = async (event) => {
-    event.preventDefault();
-
+  const handleDownloadSubmit = (event) => {
     if (!hasValidSelection) {
+      event.preventDefault();
       if (fileError) {
         showToast(fileError, { isError: true });
       }
       return;
     }
 
-    const form = event.currentTarget;
-    const formData = new FormData(form);
-
     if (advancedOptionValidation.errors.length) {
+      event.preventDefault();
       const message = advancedOptionValidation.errors.join(" ");
       setAdvancedValidationError(message);
       showToast(message, { isError: true });
@@ -807,186 +720,12 @@ export default function CropImagePage() {
     }
 
     setAdvancedValidationError("");
-    const { options } = advancedOptionValidation;
-    if (options.targetAspectRatio) {
-      formData.set("target_aspect_ratio", options.targetAspectRatio);
-    } else {
-      formData.delete("target_aspect_ratio");
-    }
-
-    const marginFields = [
-      ["margin_top", options.marginTop],
-      ["margin_right", options.marginRight],
-      ["margin_bottom", options.marginBottom],
-      ["margin_left", options.marginLeft],
-    ];
-
-    marginFields.forEach(([fieldName, value]) => {
-      if (typeof value === "number") {
-        formData.set(fieldName, String(value));
-      } else {
-        formData.delete(fieldName);
-      }
-    });
-
-    if (options.anchorHint) {
-      formData.set("anchor_hint", options.anchorHint);
-    } else {
-      formData.delete("anchor_hint");
-    }
-
-    if (options.filters?.length) {
-      formData.set("filters", options.filters.join(","));
-    } else {
-      formData.delete("filters");
-    }
-
-    setDownloadLink("");
-    setDownloadExpiryAt(null);
-    setDownloadFailureMessage("");
-    showToast("Cropping started. Preparing direct download link...");
-
-    cropFetcher.submit(formData, {
-      method: "post",
-      encType: "multipart/form-data",
-    });
+    setIsSubmittingDownload(true);
+    showToast("Cropping started. Your ZIP download will begin automatically.");
+    setTimeout(() => {
+      setIsSubmittingDownload(false);
+    }, 6000);
   };
-
-  const submitGenerationRequest = useCallback(() => {
-    if (!selectedFileObjects.length) {
-      setDownloadFailureMessage(
-        "Re-run requires the original files. Please upload again.",
-      );
-      return;
-    }
-
-    const formData = new FormData();
-    selectedFileObjects.forEach((file) => formData.append("file", file));
-    formData.append("method", selectedMethod);
-
-    if (advancedOptionValidation.errors.length) {
-      const message = advancedOptionValidation.errors.join(" ");
-      setAdvancedValidationError(message);
-      setDownloadFailureMessage(message);
-      return;
-    }
-
-    setAdvancedValidationError("");
-    const { options } = advancedOptionValidation;
-    if (options.targetAspectRatio) {
-      formData.append("target_aspect_ratio", options.targetAspectRatio);
-    }
-    if (typeof options.marginTop === "number") {
-      formData.append("margin_top", String(options.marginTop));
-    }
-    if (typeof options.marginRight === "number") {
-      formData.append("margin_right", String(options.marginRight));
-    }
-    if (typeof options.marginBottom === "number") {
-      formData.append("margin_bottom", String(options.marginBottom));
-    }
-    if (typeof options.marginLeft === "number") {
-      formData.append("margin_left", String(options.marginLeft));
-    }
-    if (options.anchorHint) {
-      formData.append("anchor_hint", options.anchorHint);
-    }
-    if (options.filters?.length) {
-      formData.append("filters", options.filters.join(","));
-    }
-
-    setDownloadLink("");
-    setDownloadExpiryAt(null);
-    setDownloadFailureMessage("");
-
-    cropFetcher.submit(formData, {
-      method: "post",
-      encType: "multipart/form-data",
-    });
-  }, [
-    advancedOptionValidation,
-    cropFetcher,
-    selectedFileObjects,
-    selectedMethod,
-  ]);
-
-  const handleDownloadClick = useCallback(async () => {
-    if (!downloadLink || isDownloadingZip) {
-      return;
-    }
-
-    setIsDownloadingZip(true);
-    setDownloadFailureMessage("");
-
-    try {
-      const response = await fetch(downloadLink, {
-        method: "GET",
-        headers: {
-          Accept: "application/json, application/octet-stream",
-        },
-      });
-
-      if (!response.ok) {
-        const contentType = response.headers.get("content-type") || "";
-        let message = "Download link expired or is no longer valid.";
-
-        if (contentType.includes("application/json")) {
-          const payload = await response.json();
-          if (payload?.error) {
-            message = payload.error;
-          }
-        } else {
-          const text = await response.text();
-          if (text) {
-            message = text;
-          }
-        }
-
-        setDownloadFailureMessage(message);
-        showToast(message, { isError: true });
-        return;
-      }
-
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      const contentDisposition =
-        response.headers.get("content-disposition") || "";
-      const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
-
-      anchor.href = blobUrl;
-      anchor.download = filenameMatch?.[1] || "cropped-images.zip";
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      // Delay URL cleanup so browsers have enough time to read the Blob.
-      // Revoking immediately can result in incomplete/corrupted downloads.
-      setTimeout(() => {
-        URL.revokeObjectURL(blobUrl);
-      }, 60_000);
-    } catch (error) {
-      const message =
-        error instanceof Error
-          ? error.message
-          : "Unable to download ZIP. Please regenerate and try again.";
-      setDownloadFailureMessage(message);
-      showToast(message, { isError: true });
-    } finally {
-      setIsDownloadingZip(false);
-    }
-  }, [downloadLink, isDownloadingZip, showToast]);
-
-  const downloadExpiryLabel = useMemo(() => {
-    if (!downloadExpiryAt) {
-      return "";
-    }
-
-    return downloadExpiryAt.toLocaleTimeString([], {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    });
-  }, [downloadExpiryAt]);
 
   const getInventoryStatus = useCallback((inventoryCount) => {
     return Number(inventoryCount) > 0 ? "In stock" : "Out of stock";
@@ -1453,66 +1192,9 @@ export default function CropImagePage() {
               Auto-crop images
             </s-button>
 
-            {loadingText && <s-text>{loadingText}</s-text>}
+            {isSubmittingDownload && <s-text>Processing and streaming ZIP…</s-text>}
           </s-stack>
         </form>
-
-        {resultSummary && (
-          <s-box
-            padding="base"
-            border="base"
-            borderRadius="base"
-            background="bg-fill-secondary"
-          >
-            <s-stack direction="block" gap="small">
-              <s-text fontWeight="semibold">Batch result summary</s-text>
-              <s-text>Requested: {resultSummary.requestedCount}</s-text>
-              <s-text>Processed: {resultSummary.processedCount}</s-text>
-              <s-text>Failed: {resultSummary.failedCount}</s-text>
-              {resultSummary.elapsedLabel !== null && (
-                <s-text>Elapsed: {resultSummary.elapsedLabel}s</s-text>
-              )}
-            </s-stack>
-          </s-box>
-        )}
-
-        {downloadLink && (
-          <s-banner tone="success">
-            <s-stack direction="block" gap="small">
-              <s-text>
-                Your ZIP is ready. Click to download the complete processed
-                batch.
-              </s-text>
-              {downloadExpiryLabel && (
-                <s-text tone="subdued">
-                  Expires at: {downloadExpiryLabel}
-                </s-text>
-              )}
-              <s-stack direction="inline" gap="small">
-                <s-button
-                  variant="secondary"
-                  onClick={handleDownloadClick}
-                  {...(isDownloadingZip ? { loading: true } : {})}
-                >
-                  Download now
-                </s-button>
-                <s-button variant="plain" onClick={submitGenerationRequest}>
-                  Regenerate download
-                </s-button>
-              </s-stack>
-              {downloadFailureMessage && (
-                <s-banner tone="warning">
-                  {downloadFailureMessage}
-                  {selectedFileObjects.length > 0 && (
-                    <s-button variant="plain" onClick={submitGenerationRequest}>
-                      Re-run generation without re-uploading
-                    </s-button>
-                  )}
-                </s-banner>
-              )}
-            </s-stack>
-          </s-banner>
-        )}
       </s-section>
 
       <s-section heading="Selected images">
@@ -1585,12 +1267,8 @@ export default function CropImagePage() {
             variant="secondary"
             onClick={() => {
               setSelectedFiles([]);
-              setSelectedFileObjects([]);
               syncPreviewFile([]);
               setFileError("");
-              setDownloadLink("");
-              setDownloadExpiryAt(null);
-              setDownloadFailureMessage("");
               setSelectedPreset("auto");
               setAdvancedMethodOverrideEnabled(false);
               setAdvancedMethod("auto");
