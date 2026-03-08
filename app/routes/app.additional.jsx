@@ -96,6 +96,7 @@ const ANCHOR_HINT_OPTIONS = [
   "right",
 ];
 const SUPPORTED_FILTERS = ["sharpen", "detail", "grayscale"];
+const PREFERENCE_STORAGE_KEY = "crop.additional.preferences";
 
 function normalizeTargetAspectRatio(rawValue) {
   const value = String(rawValue || "").trim();
@@ -484,6 +485,7 @@ export default function CropImagePage() {
 
   const inputRef = useRef(null);
   const previewUrlRef = useRef("");
+  const preferencesHydratedRef = useRef(false);
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [selectedFileObjects, setSelectedFileObjects] = useState([]);
@@ -507,6 +509,84 @@ export default function CropImagePage() {
   const [downloadExpiryAt, setDownloadExpiryAt] = useState(null);
   const [downloadFailureMessage, setDownloadFailureMessage] = useState("");
   const [progressStep, setProgressStep] = useState("idle");
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const allowedMethods = CROP_METHODS.filter((method) =>
+      planUsage.allowsFaceDetection ? true : method.value === "auto",
+    ).map((method) => method.value);
+
+    try {
+      const savedPreferences = window.localStorage.getItem(
+        PREFERENCE_STORAGE_KEY,
+      );
+
+      if (!savedPreferences) {
+        return;
+      }
+
+      const parsedPreferences = JSON.parse(savedPreferences);
+      if (typeof parsedPreferences !== "object" || !parsedPreferences) {
+        return;
+      }
+
+      if (
+        typeof parsedPreferences.selectedPreset === "string" &&
+        PRESET_OPTIONS.some((preset) => preset.value === parsedPreferences.selectedPreset)
+      ) {
+        setSelectedPreset(parsedPreferences.selectedPreset);
+      }
+
+      if (
+        typeof parsedPreferences.advancedMethodOverrideEnabled === "boolean"
+      ) {
+        setAdvancedMethodOverrideEnabled(
+          parsedPreferences.advancedMethodOverrideEnabled,
+        );
+      }
+
+      if (
+        typeof parsedPreferences.advancedMethod === "string" &&
+        allowedMethods.includes(parsedPreferences.advancedMethod)
+      ) {
+        setAdvancedMethod(parsedPreferences.advancedMethod);
+      }
+    } catch (error) {
+      console.warn("Failed to hydrate crop preferences from local storage", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    } finally {
+      preferencesHydratedRef.current = true;
+    }
+  }, [planUsage.allowsFaceDetection]);
+
+  useEffect(() => {
+    const allowedMethods = CROP_METHODS.filter((method) =>
+      planUsage.allowsFaceDetection ? true : method.value === "auto",
+    ).map((method) => method.value);
+
+    if (!allowedMethods.includes(advancedMethod)) {
+      setAdvancedMethod("auto");
+    }
+  }, [advancedMethod, planUsage.allowsFaceDetection]);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !preferencesHydratedRef.current) {
+      return;
+    }
+
+    window.localStorage.setItem(
+      PREFERENCE_STORAGE_KEY,
+      JSON.stringify({
+        selectedPreset,
+        advancedMethodOverrideEnabled,
+        advancedMethod,
+      }),
+    );
+  }, [advancedMethod, advancedMethodOverrideEnabled, selectedPreset]);
 
   const showToast = useCallback(
     (message, options) => {
