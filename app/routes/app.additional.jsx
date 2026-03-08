@@ -300,13 +300,17 @@ export default function CropImagePage() {
   const previewUrlRef = useRef("");
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
+  const [selectedFileObjects, setSelectedFileObjects] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
   const [selectedPreset, setSelectedPreset] = useState("auto");
   const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] = useState(false);
   const [advancedMethod, setAdvancedMethod] = useState("auto");
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
+  const [isDownloadingZip, setIsDownloadingZip] = useState(false);
   const [downloadLink, setDownloadLink] = useState("");
+  const [downloadExpiryAt, setDownloadExpiryAt] = useState(null);
+  const [downloadFailureMessage, setDownloadFailureMessage] = useState("");
   const [progressStep, setProgressStep] = useState("idle");
 
   const showToast = useCallback(
@@ -363,7 +367,13 @@ export default function CropImagePage() {
       return;
     }
 
+    setDownloadFailureMessage("");
     setDownloadLink(cropFetcher.data.downloadUrl);
+    setDownloadExpiryAt(
+      typeof cropFetcher.data.expiresInSeconds === "number"
+        ? new Date(Date.now() + cropFetcher.data.expiresInSeconds * 1000)
+        : null,
+    );
     showToast(`Download is ready${cropFetcher.data.filename ? `: ${cropFetcher.data.filename}` : ""}`);
   }, [cropFetcher.data, cropFetcher.state, showToast]);
 
@@ -443,6 +453,7 @@ export default function CropImagePage() {
 
     setFileError(nextError || "");
     syncPreviewFile(nextError ? [] : nextFiles);
+    setSelectedFileObjects(nextError ? [] : nextFiles);
     setSelectedFiles(
       nextError
         ? []
@@ -477,6 +488,8 @@ export default function CropImagePage() {
     const formData = new FormData(form);
 
     setDownloadLink("");
+    setDownloadExpiryAt(null);
+    setDownloadFailureMessage("");
     showToast("Cropping started. Preparing direct download link...");
 
     cropFetcher.submit(formData, {
@@ -484,6 +497,97 @@ export default function CropImagePage() {
       encType: "multipart/form-data",
     });
   };
+
+  const submitGenerationRequest = useCallback(() => {
+    if (!selectedFileObjects.length) {
+      setDownloadFailureMessage("Re-run requires the original files. Please upload again.");
+      return;
+    }
+
+    const formData = new FormData();
+    selectedFileObjects.forEach((file) => formData.append("file", file));
+    formData.append("method", selectedMethod);
+
+    setDownloadLink("");
+    setDownloadExpiryAt(null);
+    setDownloadFailureMessage("");
+
+    cropFetcher.submit(formData, {
+      method: "post",
+      encType: "multipart/form-data",
+    });
+  }, [cropFetcher, selectedFileObjects, selectedMethod]);
+
+  const handleDownloadClick = useCallback(async () => {
+    if (!downloadLink || isDownloadingZip) {
+      return;
+    }
+
+    setIsDownloadingZip(true);
+    setDownloadFailureMessage("");
+
+    try {
+      const response = await fetch(downloadLink, {
+        method: "GET",
+        headers: {
+          Accept: "application/json, application/octet-stream",
+        },
+      });
+
+      if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        let message = "Download link expired or is no longer valid.";
+
+        if (contentType.includes("application/json")) {
+          const payload = await response.json();
+          if (payload?.error) {
+            message = payload.error;
+          }
+        } else {
+          const text = await response.text();
+          if (text) {
+            message = text;
+          }
+        }
+
+        setDownloadFailureMessage(message);
+        showToast(message, { isError: true });
+        return;
+      }
+
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      const contentDisposition = response.headers.get("content-disposition") || "";
+      const filenameMatch = contentDisposition.match(/filename="?([^";]+)"?/i);
+
+      anchor.href = blobUrl;
+      anchor.download = filenameMatch?.[1] || "cropped-images.zip";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(blobUrl);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Unable to download ZIP. Please regenerate and try again.";
+      setDownloadFailureMessage(message);
+      showToast(message, { isError: true });
+    } finally {
+      setIsDownloadingZip(false);
+    }
+  }, [downloadLink, isDownloadingZip, showToast]);
+
+  const downloadExpiryLabel = useMemo(() => {
+    if (!downloadExpiryAt) {
+      return "";
+    }
+
+    return downloadExpiryAt.toLocaleTimeString([], {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    });
+  }, [downloadExpiryAt]);
 
   return (
     <s-page heading="Crop Images">
@@ -720,10 +824,36 @@ export default function CropImagePage() {
 
         {downloadLink && (
           <s-banner tone="success">
-            Your ZIP is ready. Click to download the complete processed batch.
-            <a href={downloadLink} style={{ marginLeft: "8px" }} download>
-              Download now
-            </a>
+            <s-stack direction="block" gap="small">
+              <s-text>
+                Your ZIP is ready. Click to download the complete processed batch.
+              </s-text>
+              {downloadExpiryLabel && (
+                <s-text tone="subdued">Expires at: {downloadExpiryLabel}</s-text>
+              )}
+              <s-stack direction="inline" gap="small">
+                <s-button
+                  variant="secondary"
+                  onClick={handleDownloadClick}
+                  {...(isDownloadingZip ? { loading: true } : {})}
+                >
+                  Download now
+                </s-button>
+                <s-button variant="plain" onClick={submitGenerationRequest}>
+                  Regenerate download
+                </s-button>
+              </s-stack>
+              {downloadFailureMessage && (
+                <s-banner tone="warning">
+                  {downloadFailureMessage}
+                  {selectedFileObjects.length > 0 && (
+                    <s-button variant="plain" onClick={submitGenerationRequest}>
+                      Re-run generation without re-uploading
+                    </s-button>
+                  )}
+                </s-banner>
+              )}
+            </s-stack>
           </s-banner>
         )}
       </s-section>
@@ -772,8 +902,12 @@ export default function CropImagePage() {
             variant="secondary"
             onClick={() => {
               setSelectedFiles([]);
+              setSelectedFileObjects([]);
               syncPreviewFile([]);
               setFileError("");
+              setDownloadLink("");
+              setDownloadExpiryAt(null);
+              setDownloadFailureMessage("");
               setSelectedPreset("auto");
               setAdvancedMethodOverrideEnabled(false);
               setAdvancedMethod("auto");
