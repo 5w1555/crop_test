@@ -177,3 +177,48 @@ def test_run_crop_pipeline_raises_runtime_error_when_crop_method_returns_none(mo
 
     with pytest.raises(RuntimeError, match="Cropping failed"):
         fastapi_main_module.run_crop_pipeline("tmp.jpg", "profile", fastapi_main_module.CropOptions())
+
+
+def test_crop_batch_endpoint_sets_binary_transport_headers(monkeypatch, fastapi_main_module):
+    import asyncio
+    import io
+
+    from starlette.datastructures import Headers, UploadFile
+
+    monkeypatch.setattr(fastapi_main_module, "run_crop_pipeline", lambda *args, **kwargs: object())
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "resolve_output_format",
+        lambda *args, **kwargs: {"extension": "png", "pil_format": "PNG"},
+    )
+    monkeypatch.setattr(fastapi_main_module, "image_to_buffer", lambda *args, **kwargs: io.BytesIO(b"png-bytes"))
+
+    upload = UploadFile(
+        file=io.BytesIO(b"fake-image-bytes"),
+        filename="sample.jpg",
+        headers=Headers({"content-type": "image/jpeg"}),
+    )
+
+    response = asyncio.run(
+        fastapi_main_module.crop_batch_endpoint(
+            files=[upload],
+            file=None,
+            method="auto",
+            target_aspect_ratio=None,
+            margin_top=None,
+            margin_right=None,
+            margin_bottom=None,
+            margin_left=None,
+            anchor_hint=None,
+            filters=None,
+            _=None,
+        )
+    )
+
+    assert response.media_type == "application/zip"
+    assert response.headers["content-disposition"] == 'attachment; filename="cropped_batch.zip"'
+    assert response.headers["cache-control"] == "no-store, no-transform"
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert int(response.headers["content-length"]) > 0
+
+    asyncio.run(response.background())
