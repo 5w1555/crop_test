@@ -1,3 +1,4 @@
+import { useLoaderData } from "react-router";
 import { takePreparedDownload } from "../utils/preparedDownloads.server";
 
 export const loader = async ({ request }) => {
@@ -5,16 +6,30 @@ export const loader = async ({ request }) => {
   const token = url.searchParams.get("token");
 
   if (!token) {
-    return new Response("Missing download token.", { status: 400 });
+    return Response.json(
+      {
+        ok: false,
+        code: "missing_token",
+        error: "Download link is missing. Generate a new ZIP to continue.",
+      },
+      { status: 400 },
+    );
   }
 
   const preparedDownload = takePreparedDownload(token);
 
   if (!preparedDownload) {
-    return new Response("Download link is invalid or expired.", { status: 410 });
+    return Response.json(
+      {
+        ok: false,
+        code: "expired_or_invalid",
+        error: "This download link has expired or is invalid. Regenerate the ZIP from the crop screen.",
+      },
+      { status: 410 },
+    );
   }
 
-  const response = new Response(preparedDownload.stream, {
+  return new Response(preparedDownload.stream, {
     status: 200,
     headers: {
       "content-type": preparedDownload.mimeType,
@@ -22,7 +37,20 @@ export const loader = async ({ request }) => {
       "cache-control": "no-store",
     },
   });
-
-  return response;
 };
 
+export default function DownloadRoute() {
+  const data = useLoaderData();
+
+  if (!data || data.ok !== false) {
+    return null;
+  }
+
+  return (
+    <main style={{ padding: "2rem", maxWidth: "640px", margin: "0 auto" }}>
+      <h1>Download unavailable</h1>
+      <p>{data.error}</p>
+      <a href="/app/additional">Back to crop tool</a>
+    </main>
+  );
+}
