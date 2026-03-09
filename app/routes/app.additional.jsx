@@ -96,6 +96,36 @@ const ANCHOR_HINT_OPTIONS = [
 ];
 const SUPPORTED_FILTERS = ["sharpen", "detail", "grayscale"];
 const PREFERENCE_STORAGE_KEY = "crop.additional.preferences";
+const PRESET_ASPECT_RATIO_HINTS = {
+  portrait: 4 / 5,
+  square: 1,
+  product: 1,
+};
+const METHOD_ASPECT_RATIO_HINTS = {
+  head_bust: 4 / 5,
+  frontal: 4 / 5,
+  profile: 4 / 5,
+  chin: 1,
+  nose: 1,
+  below_lips: 1,
+  center_content: 1,
+};
+
+function clamp(value, min, max) {
+  if (!Number.isFinite(value)) {
+    return min;
+  }
+
+  if (value < min) {
+    return min;
+  }
+
+  if (value > max) {
+    return max;
+  }
+
+  return value;
+}
 
 function normalizeTargetAspectRatio(rawValue) {
   const value = String(rawValue || "").trim();
@@ -185,6 +215,105 @@ function normalizeFilters(rawValue) {
   return { value, normalizedFilters, error: null };
 }
 
+function parseAspectRatioValue(rawValue) {
+  const normalized = normalizeTargetAspectRatio(rawValue);
+  if (normalized.error || !normalized.value) {
+    return null;
+  }
+
+  if (normalized.value.includes(":")) {
+    const [widthPart, heightPart] = normalized.value
+      .split(":")
+      .map((part) => Number(part.trim()));
+
+    if (
+      !Number.isFinite(widthPart) ||
+      widthPart <= 0 ||
+      !Number.isFinite(heightPart) ||
+      heightPart <= 0
+    ) {
+      return null;
+    }
+
+    return widthPart / heightPart;
+  }
+
+  const numericValue = Number(normalized.value);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return null;
+  }
+
+  return numericValue;
+}
+
+function normalizePreviewMarginFraction(rawValue) {
+  const trimmedValue = String(rawValue || "").trim();
+  if (!trimmedValue) {
+    return 0;
+  }
+
+  const numericValue = Number(trimmedValue);
+  if (!Number.isFinite(numericValue) || numericValue <= 0) {
+    return 0;
+  }
+
+  const normalized = numericValue <= 1 ? numericValue : numericValue / 100;
+  return clamp(normalized, 0, 0.45);
+}
+
+function getPreviewAnchorBias(anchorHint, method) {
+  const normalizedAnchor = String(anchorHint || "")
+    .trim()
+    .toLowerCase();
+
+  if (normalizedAnchor === "top") {
+    return { x: 0.5, y: 0 };
+  }
+
+  if (normalizedAnchor === "bottom") {
+    return { x: 0.5, y: 1 };
+  }
+
+  if (normalizedAnchor === "left") {
+    return { x: 0, y: 0.5 };
+  }
+
+  if (normalizedAnchor === "right") {
+    return { x: 1, y: 0.5 };
+  }
+
+  if (normalizedAnchor === "center") {
+    return { x: 0.5, y: 0.5 };
+  }
+
+  switch (method) {
+    case "head_bust":
+    case "frontal":
+    case "profile":
+      return { x: 0.5, y: 0.2 };
+    case "below_lips":
+      return { x: 0.5, y: 0.6 };
+    case "chin":
+      return { x: 0.5, y: 0.72 };
+    case "nose":
+      return { x: 0.5, y: 0.5 };
+    default:
+      return { x: 0.5, y: 0.5 };
+  }
+}
+
+function formatRatioPreviewLabel(aspectRatio) {
+  if (!Number.isFinite(aspectRatio) || aspectRatio <= 0) {
+    return "Original ratio";
+  }
+
+  const widthPart = aspectRatio >= 1 ? aspectRatio : 1;
+  const heightPart = aspectRatio >= 1 ? 1 : 1 / aspectRatio;
+  const formatPart = (value) => Number(value.toFixed(2)).toString();
+
+  return `${formatPart(widthPart)}:${formatPart(heightPart)}`;
+}
+
 function buildCropOptionPayload(values) {
   const targetAspectRatio = normalizeTargetAspectRatio(
     values.targetAspectRatio,
@@ -244,6 +373,16 @@ function validateImageFile(file) {
   }
 
   return null;
+}
+
+function jsonError(error, status = 400, extra = {}) {
+  return Response.json(
+    {
+      error,
+      ...extra,
+    },
+    { status },
+  );
 }
 
 export const loader = async ({ request }) => {
@@ -326,14 +465,16 @@ export const action = async ({ request }) => {
   const formData = await request.formData();
   const files = formData.getAll("file");
 
-  if (!files.length) return { error: "Please upload at least one image." };
+  if (!files.length) {
+    return jsonError("Please upload at least one image.");
+  }
 
   for (const file of files) {
     const fileError = validateImageFile(file);
     if (fileError) {
-      return {
-        error: `${file instanceof File ? file.name : "File"}: ${fileError}`,
-      };
+      return jsonError(
+        `${file instanceof File ? file.name : "File"}: ${fileError}`,
+      );
     }
   }
 
@@ -349,7 +490,7 @@ export const action = async ({ request }) => {
   });
 
   if (optionPayload.errors.length) {
-    return { error: optionPayload.errors.join(" ") };
+    return jsonError(optionPayload.errors.join(" "));
   }
 
   const billingState = await getBillingState({ billing });
@@ -361,7 +502,7 @@ export const action = async ({ request }) => {
   });
 
   if (!planReservation.ok) {
-    return { error: planReservation.error, plan: planReservation.plan };
+    return jsonError(planReservation.error, 403, { plan: planReservation.plan });
   }
 
   try {
@@ -436,9 +577,10 @@ export const action = async ({ request }) => {
         mimeType,
         bodyPreview,
       });
-      return {
-        error: `Expected application/zip response but received ${mimeType}.`,
-      };
+      return jsonError(
+        `Expected application/zip response but received ${mimeType}.`,
+        502,
+      );
     }
 
     await commitPlanUsage({ shop: session.shop, imageCount: files.length });
@@ -479,12 +621,12 @@ export const action = async ({ request }) => {
       fileCount: files.length,
       method: planReservation.effectiveMethod,
     });
-    return {
-      error:
-        error instanceof Error
-          ? error.message
-          : "Unable to crop image. Check the FastAPI service.",
-    };
+    return jsonError(
+      error instanceof Error
+        ? error.message
+        : "Unable to crop image. Check the FastAPI service.",
+      502,
+    );
   }
 };
 
@@ -504,6 +646,10 @@ export default function CropImagePage() {
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
+  const [previewDimensions, setPreviewDimensions] = useState({
+    width: 0,
+    height: 0,
+  });
   const [selectedPreset, setSelectedPreset] = useState("auto");
   const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] =
     useState(false);
@@ -638,11 +784,13 @@ export default function CropImagePage() {
     const firstFile = nextFiles[0];
     if (!firstFile) {
       setPreviewFile(null);
+      setPreviewDimensions({ width: 0, height: 0 });
       return;
     }
 
     const previewUrl = URL.createObjectURL(firstFile);
     previewUrlRef.current = previewUrl;
+    setPreviewDimensions({ width: 0, height: 0 });
     setPreviewFile({
       name: firstFile.name,
       src: previewUrl,
@@ -701,10 +849,131 @@ export default function CropImagePage() {
       targetAspectRatioInput,
     ],
   );
+  const cropPreviewModel = useMemo(() => {
+    if (
+      !previewFile ||
+      previewDimensions.width <= 0 ||
+      previewDimensions.height <= 0
+    ) {
+      return null;
+    }
 
-  const handleDownloadSubmit = (event) => {
+    const sourceAspectRatio = previewDimensions.width / previewDimensions.height;
+    const explicitAspectRatio = parseAspectRatioValue(targetAspectRatioInput);
+    const hintedAspectRatio =
+      PRESET_ASPECT_RATIO_HINTS[selectedPreset] ||
+      METHOD_ASPECT_RATIO_HINTS[selectedMethod] ||
+      sourceAspectRatio;
+    const targetAspectRatio = clamp(
+      explicitAspectRatio || hintedAspectRatio || sourceAspectRatio,
+      0.2,
+      5,
+    );
+
+    const rawMargins = {
+      top: normalizePreviewMarginFraction(marginTopInput),
+      right: normalizePreviewMarginFraction(marginRightInput),
+      bottom: normalizePreviewMarginFraction(marginBottomInput),
+      left: normalizePreviewMarginFraction(marginLeftInput),
+    };
+
+    const horizontalTotal = rawMargins.left + rawMargins.right;
+    const verticalTotal = rawMargins.top + rawMargins.bottom;
+    const horizontalScale = horizontalTotal > 0.9 ? 0.9 / horizontalTotal : 1;
+    const verticalScale = verticalTotal > 0.9 ? 0.9 / verticalTotal : 1;
+
+    const margins = {
+      top: rawMargins.top * verticalScale,
+      right: rawMargins.right * horizontalScale,
+      bottom: rawMargins.bottom * verticalScale,
+      left: rawMargins.left * horizontalScale,
+    };
+
+    const availableWidth = Math.max(1 - margins.left - margins.right, 0.05);
+    const availableHeight = Math.max(1 - margins.top - margins.bottom, 0.05);
+    const availableAspectRatio = availableWidth / availableHeight;
+
+    let cropWidth = availableWidth;
+    let cropHeight = availableHeight;
+
+    if (availableAspectRatio > targetAspectRatio) {
+      cropWidth = availableHeight * targetAspectRatio;
+    } else {
+      cropHeight = availableWidth / targetAspectRatio;
+    }
+
+    const minLeft = margins.left;
+    const minTop = margins.top;
+    const maxLeft = Math.max(minLeft, 1 - margins.right - cropWidth);
+    const maxTop = Math.max(minTop, 1 - margins.bottom - cropHeight);
+    const anchorBias = getPreviewAnchorBias(anchorHintInput, selectedMethod);
+    const left = clamp(
+      minLeft + (maxLeft - minLeft) * anchorBias.x,
+      minLeft,
+      maxLeft,
+    );
+    const top = clamp(
+      minTop + (maxTop - minTop) * anchorBias.y,
+      minTop,
+      maxTop,
+    );
+
+    return {
+      left,
+      top,
+      width: cropWidth,
+      height: cropHeight,
+      targetAspectRatio,
+    };
+  }, [
+    anchorHintInput,
+    marginBottomInput,
+    marginLeftInput,
+    marginRightInput,
+    marginTopInput,
+    previewDimensions.height,
+    previewDimensions.width,
+    previewFile,
+    selectedMethod,
+    selectedPreset,
+    targetAspectRatioInput,
+  ]);
+  const cropOverlayStyle = useMemo(() => {
+    if (!cropPreviewModel) {
+      return null;
+    }
+
+    return {
+      left: `${(cropPreviewModel.left * 100).toFixed(2)}%`,
+      top: `${(cropPreviewModel.top * 100).toFixed(2)}%`,
+      width: `${(cropPreviewModel.width * 100).toFixed(2)}%`,
+      height: `${(cropPreviewModel.height * 100).toFixed(2)}%`,
+    };
+  }, [cropPreviewModel]);
+  const croppedOutputImageStyle = useMemo(() => {
+    if (!cropPreviewModel) {
+      return null;
+    }
+
+    return {
+      width: `${(100 / cropPreviewModel.width).toFixed(4)}%`,
+      height: `${(100 / cropPreviewModel.height).toFixed(4)}%`,
+      left: `${((-cropPreviewModel.left / cropPreviewModel.width) * 100).toFixed(4)}%`,
+      top: `${((-cropPreviewModel.top / cropPreviewModel.height) * 100).toFixed(4)}%`,
+    };
+  }, [cropPreviewModel]);
+  const cropPreviewRatioLabel = useMemo(() => {
+    if (!cropPreviewModel) {
+      return "";
+    }
+
+    return formatRatioPreviewLabel(cropPreviewModel.targetAspectRatio);
+  }, [cropPreviewModel]);
+
+  const handleDownloadSubmit = async (event) => {
+    event.preventDefault();
+
     if (!hasValidSelection) {
-      event.preventDefault();
       if (fileError) {
         showToast(fileError, { isError: true });
       }
@@ -712,7 +981,6 @@ export default function CropImagePage() {
     }
 
     if (advancedOptionValidation.errors.length) {
-      event.preventDefault();
       const message = advancedOptionValidation.errors.join(" ");
       setAdvancedValidationError(message);
       showToast(message, { isError: true });
@@ -721,10 +989,67 @@ export default function CropImagePage() {
 
     setAdvancedValidationError("");
     setIsSubmittingDownload(true);
-    showToast("Cropping started. Your ZIP download will begin automatically.");
-    setTimeout(() => {
+    showToast("Cropping started. Preparing your ZIP download...");
+
+    try {
+      if (!shopify || typeof shopify.idToken !== "function") {
+        throw new Error("Shopify session token is unavailable in this context.");
+      }
+
+      const idToken = await shopify.idToken();
+      const form = event.currentTarget;
+      const response = await fetch(form.action, {
+        method: "POST",
+        body: new FormData(form),
+        headers: {
+          Authorization: `Bearer ${idToken}`,
+        },
+      });
+
+      const contentType = response.headers.get("content-type") || "";
+
+      if (contentType.includes("application/json")) {
+        const payload = await response.json();
+        if (typeof payload?.error === "string" && payload.error) {
+          showToast(payload.error, { isError: true });
+          return;
+        }
+      }
+
+      if (!response.ok) {
+        throw new Error(`Crop request failed (${response.status}).`);
+      }
+
+      if (!contentType.includes("application/zip")) {
+        throw new Error(`Expected ZIP download but received ${contentType}.`);
+      }
+
+      const disposition = response.headers.get("content-disposition") || "";
+      const filenameMatch = disposition.match(/filename="([^"]+)"/i);
+      const filename = filenameMatch?.[1] || "cropped_batch.zip";
+      const blob = await response.blob();
+      const downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = downloadUrl;
+      anchor.download = filename;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => {
+        URL.revokeObjectURL(downloadUrl);
+      }, 1000);
+
+      showToast("Crop completed. ZIP download started.");
+    } catch (error) {
+      showToast(
+        error instanceof Error
+          ? error.message
+          : "Unable to crop image. Check the FastAPI service.",
+        { isError: true },
+      );
+    } finally {
       setIsSubmittingDownload(false);
-    }, 6000);
+    }
   };
 
   const getInventoryStatus = useCallback((inventoryCount) => {
@@ -781,6 +1106,53 @@ export default function CropImagePage() {
           gap: 8px;
         }
 
+        .crop-preview-grid {
+          display: grid;
+          grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+          gap: 12px;
+          align-items: start;
+        }
+
+        .crop-preview-stage {
+          position: relative;
+          width: 100%;
+          max-width: 480px;
+          border: 1px solid rgba(0, 0, 0, 0.08);
+          border-radius: 12px;
+          overflow: hidden;
+          background: rgba(255, 255, 255, 0.9);
+        }
+
+        .crop-preview-stage img {
+          display: block;
+          width: 100%;
+          height: auto;
+        }
+
+        .crop-preview-overlay {
+          position: absolute;
+          border: 2px solid #008060;
+          border-radius: 10px;
+          box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.35);
+          pointer-events: none;
+        }
+
+        .crop-preview-cropped {
+          position: relative;
+          width: 100%;
+          border: 1px solid rgba(0, 0, 0, 0.12);
+          border-radius: 12px;
+          overflow: hidden;
+          background: #fff;
+        }
+
+        .crop-preview-cropped img {
+          position: absolute;
+          max-width: none;
+          user-select: none;
+          -webkit-user-drag: none;
+        }
+
         @media (max-width: 900px) {
           .responsive-table {
             display: none;
@@ -789,6 +1161,14 @@ export default function CropImagePage() {
           .responsive-card-list {
             display: grid;
             gap: 12px;
+          }
+
+          .crop-preview-grid {
+            grid-template-columns: minmax(0, 1fr);
+          }
+
+          .crop-preview-cropped {
+            max-width: 320px;
           }
         }
 
@@ -1250,11 +1630,53 @@ export default function CropImagePage() {
           <s-stack direction="block" gap="small">
             <s-text fontWeight="semibold">Preview (first image only)</s-text>
             <s-text tone="subdued">{previewFile.name}</s-text>
-            <img
-              src={previewFile.src}
-              alt={`Preview for ${previewFile.name}`}
-              style={{ maxWidth: "320px", height: "auto", borderRadius: "8px" }}
-            />
+            {cropPreviewModel && (
+              <s-text tone="subdued">
+                Estimated output ratio: {cropPreviewRatioLabel}
+              </s-text>
+            )}
+            <div className="crop-preview-grid">
+              <div className="crop-preview-stage">
+                <img
+                  src={previewFile.src}
+                  alt={`Preview for ${previewFile.name}`}
+                  onLoad={(event) => {
+                    const { naturalWidth, naturalHeight } = event.currentTarget;
+                    setPreviewDimensions((previous) => {
+                      if (
+                        previous.width === naturalWidth &&
+                        previous.height === naturalHeight
+                      ) {
+                        return previous;
+                      }
+
+                      return {
+                        width: naturalWidth,
+                        height: naturalHeight,
+                      };
+                    });
+                  }}
+                />
+                {cropOverlayStyle && (
+                  <div
+                    className="crop-preview-overlay"
+                    style={cropOverlayStyle}
+                  />
+                )}
+              </div>
+              {cropPreviewModel && croppedOutputImageStyle && (
+                <div
+                  className="crop-preview-cropped"
+                  style={{ aspectRatio: cropPreviewModel.targetAspectRatio }}
+                >
+                  <img
+                    src={previewFile.src}
+                    alt={`Estimated crop for ${previewFile.name}`}
+                    style={croppedOutputImageStyle}
+                  />
+                </div>
+              )}
+            </div>
           </s-stack>
         )}
       </s-section>
