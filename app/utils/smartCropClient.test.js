@@ -144,6 +144,12 @@ test("cropImage appends optional crop contract fields", async () => {
     marginBottom: 0.05,
     marginLeft: 0.15,
     anchorHint: "top",
+    cropCoordinates: {
+      left: 0.1,
+      top: 0.2,
+      width: 0.6,
+      height: 0.5,
+    },
     filters: ["detail", "sharpen"],
   });
 
@@ -153,6 +159,10 @@ test("cropImage appends optional crop contract fields", async () => {
   assert.equal(requestedOptions.body.get("margin_bottom"), "0.05");
   assert.equal(requestedOptions.body.get("margin_left"), "0.15");
   assert.equal(requestedOptions.body.get("anchor_hint"), "top");
+  assert.equal(
+    requestedOptions.body.get("crop_coordinates"),
+    '{"left":0.1,"top":0.2,"width":0.6,"height":0.5}',
+  );
   assert.equal(requestedOptions.body.get("filters"), '["detail","sharpen"]');
 });
 
@@ -174,6 +184,8 @@ test("cropImages appends optional crop contract fields", async () => {
     marginBottom: 0.1,
     marginLeft: 0.1,
     anchorHint: "center",
+    cropCoordinates:
+      '{"left":0.15,"top":0.1,"width":0.7,"height":0.75,"unit":"fraction"}',
     filters: "detail,sharpen",
   });
 
@@ -184,6 +196,10 @@ test("cropImages appends optional crop contract fields", async () => {
   assert.equal(requestedOptions.body.get("margin_bottom"), "0.1");
   assert.equal(requestedOptions.body.get("margin_left"), "0.1");
   assert.equal(requestedOptions.body.get("anchor_hint"), "center");
+  assert.equal(
+    requestedOptions.body.get("crop_coordinates"),
+    '{"left":0.15,"top":0.1,"width":0.7,"height":0.75,"unit":"fraction"}',
+  );
   assert.equal(requestedOptions.body.get("filters"), "detail,sharpen");
 });
 

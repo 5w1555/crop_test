@@ -25,6 +25,17 @@ function appendCropOptions(form, options = {}) {
     form.append("target_aspect_ratio", String(options.targetAspectRatio));
   }
   if (options.anchorHint) form.append("anchor_hint", String(options.anchorHint));
+  if (
+    options.cropCoordinates !== undefined &&
+    options.cropCoordinates !== null &&
+    options.cropCoordinates !== ""
+  ) {
+    const cropCoordinatesValue =
+      typeof options.cropCoordinates === "string"
+        ? options.cropCoordinates
+        : JSON.stringify(options.cropCoordinates);
+    form.append("crop_coordinates", cropCoordinatesValue);
+  }
   if (options.filters) {
     const filterValue = Array.isArray(options.filters)
       ? JSON.stringify(options.filters)

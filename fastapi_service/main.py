@@ -1767,6 +1767,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+CROP_COORDINATE_EPSILON = 0.001
+
 
 @app.get("/")
 async def root():
@@ -1794,6 +1796,7 @@ async def crop_endpoint(
     margin_bottom: float | None = Form(default=None),
     margin_left: float | None = Form(default=None),
     anchor_hint: str | None = Form(default=None),
+    crop_coordinates: str | None = Form(default=None),
     filters: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
@@ -1810,6 +1813,7 @@ async def crop_endpoint(
         margin_bottom=margin_bottom,
         margin_left=margin_left,
         anchor_hint=anchor_hint,
+        crop_coordinates=crop_coordinates,
         filters=filters,
     )
     try:
@@ -1842,6 +1846,11 @@ def run_crop_pipeline(
     box, landmarks, cv_img, pil_img, metadata = get_face_and_landmarks(
         temp_path, conf_threshold=0.3
     )
+
+    if crop_options.crop_coordinates:
+        if pil_img is None:
+            raise RuntimeError("Unable to load image for manual crop")
+        return apply_crop_postprocessing(pil_img, crop_options)
 
     cropped = None
     no_face_detected = box is None or landmarks is None
@@ -1886,6 +1895,7 @@ class CropOptions:
     target_aspect_ratio: tuple[float, float] | None = None
     margins: tuple[float, float, float, float] | None = None
     anchor_hint: str | None = None
+    crop_coordinates: dict[str, float] | None = None
     filters: list[str] | None = None
 
 
@@ -1896,16 +1906,19 @@ def parse_crop_options(
     margin_bottom: float | None,
     margin_left: float | None,
     anchor_hint: str | None,
-    filters: str | None,
+    crop_coordinates: str | None = None,
+    filters: str | None = None,
 ) -> CropOptions:
     ratio = _parse_aspect_ratio(target_aspect_ratio)
     margins = _parse_margins(margin_top, margin_right, margin_bottom, margin_left)
     normalized_anchor_hint = _normalize_anchor_hint(anchor_hint)
+    normalized_crop_coordinates = _parse_crop_coordinates(crop_coordinates)
     normalized_filters = _parse_filters(filters)
     return CropOptions(
         target_aspect_ratio=ratio,
         margins=margins,
         anchor_hint=normalized_anchor_hint,
+        crop_coordinates=normalized_crop_coordinates,
         filters=normalized_filters,
     )
 
@@ -1996,21 +2009,123 @@ def _parse_filters(filters: str | None):
     return normalized
 
 
-def apply_crop_postprocessing(cropped, crop_options: CropOptions):
-    if crop_options.target_aspect_ratio:
-        cropped = enforce_target_aspect_ratio(
-            cropped,
-            crop_options.target_aspect_ratio,
-            crop_options.anchor_hint,
+def _parse_crop_coordinates(crop_coordinates: str | None):
+    if not crop_coordinates:
+        return None
+
+    try:
+        parsed = json.loads(crop_coordinates)
+    except json.JSONDecodeError as exc:
+        raise HTTPException(status_code=400, detail="crop_coordinates must be valid JSON") from exc
+
+    if not isinstance(parsed, dict):
+        raise HTTPException(status_code=400, detail="crop_coordinates must be a JSON object")
+
+    def parse_coordinate(field_name: str):
+        raw_value = parsed.get(field_name)
+        try:
+            value = float(raw_value)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(
+                status_code=400,
+                detail="crop_coordinates require numeric left, top, width, and height",
+            ) from exc
+
+        if not math.isfinite(value):
+            raise HTTPException(
+                status_code=400,
+                detail="crop_coordinates require numeric left, top, width, and height",
+            )
+
+        return value
+
+    left = parse_coordinate("left")
+    top = parse_coordinate("top")
+    width = parse_coordinate("width")
+    height = parse_coordinate("height")
+
+    if width <= 0 or height <= 0:
+        raise HTTPException(status_code=400, detail="crop_coordinates width and height must be positive")
+
+    if (
+        left < 0
+        or top < 0
+        or left + width > 1 + CROP_COORDINATE_EPSILON
+        or top + height > 1 + CROP_COORDINATE_EPSILON
+    ):
+        raise HTTPException(
+            status_code=400,
+            detail="crop_coordinates must stay within image bounds (fractional values from 0 to 1)",
         )
 
-    if crop_options.margins:
-        cropped = apply_crop_margins(cropped, crop_options.margins)
+    normalized = {
+        "left": min(max(left, 0.0), 1.0),
+        "top": min(max(top, 0.0), 1.0),
+        "width": min(max(width, 0.0), 1.0),
+        "height": min(max(height, 0.0), 1.0),
+    }
+
+    source_width = parsed.get("sourceWidth")
+    if source_width is not None:
+        try:
+            source_width = float(source_width)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="crop_coordinates sourceWidth must be positive") from exc
+        if not math.isfinite(source_width) or source_width <= 0:
+            raise HTTPException(status_code=400, detail="crop_coordinates sourceWidth must be positive")
+        normalized["sourceWidth"] = source_width
+
+    source_height = parsed.get("sourceHeight")
+    if source_height is not None:
+        try:
+            source_height = float(source_height)
+        except (TypeError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail="crop_coordinates sourceHeight must be positive") from exc
+        if not math.isfinite(source_height) or source_height <= 0:
+            raise HTTPException(status_code=400, detail="crop_coordinates sourceHeight must be positive")
+        normalized["sourceHeight"] = source_height
+
+    return normalized
+
+
+def apply_crop_postprocessing(cropped, crop_options: CropOptions):
+    if crop_options.crop_coordinates:
+        cropped = apply_manual_crop_coordinates(cropped, crop_options.crop_coordinates)
+    else:
+        if crop_options.target_aspect_ratio:
+            cropped = enforce_target_aspect_ratio(
+                cropped,
+                crop_options.target_aspect_ratio,
+                crop_options.anchor_hint,
+            )
+
+        if crop_options.margins:
+            cropped = apply_crop_margins(cropped, crop_options.margins)
 
     if crop_options.filters:
         cropped = apply_optional_filters(cropped, crop_options.filters)
 
     return cropped
+
+
+def apply_manual_crop_coordinates(image, crop_coordinates):
+    width, height = image.size
+    left = crop_coordinates["left"]
+    top = crop_coordinates["top"]
+    right = left + crop_coordinates["width"]
+    bottom = top + crop_coordinates["height"]
+
+    left_px = int(math.floor(left * width))
+    top_px = int(math.floor(top * height))
+    right_px = int(math.ceil(right * width))
+    bottom_px = int(math.ceil(bottom * height))
+
+    left_px = min(max(left_px, 0), width - 1)
+    top_px = min(max(top_px, 0), height - 1)
+    right_px = min(max(right_px, left_px + 1), width)
+    bottom_px = min(max(bottom_px, top_px + 1), height)
+
+    return image.crop((left_px, top_px, right_px, bottom_px))
 
 
 def enforce_target_aspect_ratio(image, ratio, anchor_hint):
@@ -2150,6 +2265,7 @@ async def crop_batch_endpoint(
     margin_bottom: float | None = Form(default=None),
     margin_left: float | None = Form(default=None),
     anchor_hint: str | None = Form(default=None),
+    crop_coordinates: str | None = Form(default=None),
     filters: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
@@ -2179,6 +2295,7 @@ async def crop_batch_endpoint(
         margin_bottom=margin_bottom,
         margin_left=margin_left,
         anchor_hint=anchor_hint,
+        crop_coordinates=crop_coordinates,
         filters=filters,
     )
     used_output_names = {}
