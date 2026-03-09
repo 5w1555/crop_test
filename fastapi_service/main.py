@@ -1577,6 +1577,7 @@ def main():
         print("Failed to save cropped image.")
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
+from fastapi.params import Form as FormField
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from starlette.background import BackgroundTask
@@ -2010,8 +2011,15 @@ def _parse_filters(filters: str | None):
 
 
 def _parse_crop_coordinates(crop_coordinates: str | None):
+    # Direct/internal endpoint calls can pass FastAPI's Form(None) sentinel.
+    if isinstance(crop_coordinates, FormField):
+        crop_coordinates = crop_coordinates.default
+
     if not crop_coordinates:
         return None
+
+    if not isinstance(crop_coordinates, str):
+        raise HTTPException(status_code=400, detail="crop_coordinates must be valid JSON")
 
     try:
         parsed = json.loads(crop_coordinates)
