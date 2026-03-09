@@ -96,6 +96,20 @@ const ANCHOR_HINT_OPTIONS = [
 ];
 const SUPPORTED_FILTERS = ["sharpen", "detail", "grayscale"];
 const PREFERENCE_STORAGE_KEY = "crop.additional.preferences";
+const PRESET_TARGET_ASPECT_RATIO_DEFAULTS = {
+  portrait: "4:5",
+  square: "1:1",
+  product: "1:1",
+};
+const METHOD_TARGET_ASPECT_RATIO_DEFAULTS = {
+  head_bust: "4:5",
+  frontal: "4:5",
+  profile: "4:5",
+  chin: "1:1",
+  nose: "1:1",
+  below_lips: "1:1",
+  center_content: "1:1",
+};
 const PRESET_ASPECT_RATIO_HINTS = {
   portrait: 4 / 5,
   square: 1,
@@ -972,6 +986,18 @@ export default function CropImagePage() {
 
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
+    const form = event.currentTarget;
+
+    if (!(form instanceof HTMLFormElement)) {
+      showToast("Unable to submit crop request form.", { isError: true });
+      return;
+    }
+
+    const requestUrl =
+      form.action ||
+      (typeof window !== "undefined"
+        ? window.location.pathname + window.location.search
+        : "/app/additional");
 
     if (!hasValidSelection) {
       if (fileError) {
@@ -996,11 +1022,25 @@ export default function CropImagePage() {
         throw new Error("Shopify session token is unavailable in this context.");
       }
 
+      const formData = new FormData(form);
+      const explicitTargetAspectRatio = String(
+        formData.get("target_aspect_ratio") || "",
+      ).trim();
+
+      if (!explicitTargetAspectRatio) {
+        const fallbackTargetAspectRatio =
+          PRESET_TARGET_ASPECT_RATIO_DEFAULTS[selectedPreset] ||
+          METHOD_TARGET_ASPECT_RATIO_DEFAULTS[selectedMethod];
+
+        if (fallbackTargetAspectRatio) {
+          formData.set("target_aspect_ratio", fallbackTargetAspectRatio);
+        }
+      }
+
       const idToken = await shopify.idToken();
-      const form = event.currentTarget;
-      const response = await fetch(form.action, {
+      const response = await fetch(requestUrl, {
         method: "POST",
-        body: new FormData(form),
+        body: formData,
         headers: {
           Authorization: `Bearer ${idToken}`,
         },
