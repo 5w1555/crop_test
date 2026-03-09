@@ -120,6 +120,10 @@ def test_parse_crop_coordinates_rejects_invalid_json(fastapi_main_module):
     assert exc_info.value.status_code == 400
 
 
+def test_parse_crop_coordinates_accepts_fastapi_form_default_none(fastapi_main_module):
+    assert fastapi_main_module._parse_crop_coordinates(fastapi_main_module.Form(default=None)) is None
+
+
 def test_apply_crop_postprocessing_manual_crop_coordinates_take_precedence(fastapi_main_module):
     image = Image.new("RGB", (120, 80), "white")
     crop_options = fastapi_main_module.CropOptions(
