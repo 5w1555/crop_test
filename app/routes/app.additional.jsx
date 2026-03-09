@@ -96,20 +96,6 @@ const ANCHOR_HINT_OPTIONS = [
 ];
 const SUPPORTED_FILTERS = ["sharpen", "detail", "grayscale"];
 const PREFERENCE_STORAGE_KEY = "crop.additional.preferences";
-const PRESET_TARGET_ASPECT_RATIO_DEFAULTS = {
-  portrait: "4:5",
-  square: "1:1",
-  product: "1:1",
-};
-const METHOD_TARGET_ASPECT_RATIO_DEFAULTS = {
-  head_bust: "4:5",
-  frontal: "4:5",
-  profile: "4:5",
-  chin: "1:1",
-  nose: "1:1",
-  below_lips: "1:1",
-  center_content: "1:1",
-};
 const PRESET_ASPECT_RATIO_HINTS = {
   portrait: 4 / 5,
   square: 1,
@@ -124,6 +110,8 @@ const METHOD_ASPECT_RATIO_HINTS = {
   below_lips: 1,
   center_content: 1,
 };
+const MIN_CROP_SIZE_FRACTION = 0.05;
+const CROP_COORDINATE_EPSILON = 0.001;
 
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) {
@@ -229,52 +217,6 @@ function normalizeFilters(rawValue) {
   return { value, normalizedFilters, error: null };
 }
 
-function parseAspectRatioValue(rawValue) {
-  const normalized = normalizeTargetAspectRatio(rawValue);
-  if (normalized.error || !normalized.value) {
-    return null;
-  }
-
-  if (normalized.value.includes(":")) {
-    const [widthPart, heightPart] = normalized.value
-      .split(":")
-      .map((part) => Number(part.trim()));
-
-    if (
-      !Number.isFinite(widthPart) ||
-      widthPart <= 0 ||
-      !Number.isFinite(heightPart) ||
-      heightPart <= 0
-    ) {
-      return null;
-    }
-
-    return widthPart / heightPart;
-  }
-
-  const numericValue = Number(normalized.value);
-  if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    return null;
-  }
-
-  return numericValue;
-}
-
-function normalizePreviewMarginFraction(rawValue) {
-  const trimmedValue = String(rawValue || "").trim();
-  if (!trimmedValue) {
-    return 0;
-  }
-
-  const numericValue = Number(trimmedValue);
-  if (!Number.isFinite(numericValue) || numericValue <= 0) {
-    return 0;
-  }
-
-  const normalized = numericValue <= 1 ? numericValue : numericValue / 100;
-  return clamp(normalized, 0, 0.45);
-}
-
 function getPreviewAnchorBias(anchorHint, method) {
   const normalizedAnchor = String(anchorHint || "")
     .trim()
@@ -328,6 +270,249 @@ function formatRatioPreviewLabel(aspectRatio) {
   return `${formatPart(widthPart)}:${formatPart(heightPart)}`;
 }
 
+function normalizeCropCoordinates(rawValue) {
+  const value = String(rawValue || "").trim();
+  if (!value) {
+    return { value: "", coordinates: undefined, error: null };
+  }
+
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    return {
+      value,
+      coordinates: undefined,
+      error: "Crop coordinates must be valid JSON.",
+    };
+  }
+
+  if (!parsed || typeof parsed !== "object") {
+    return {
+      value,
+      coordinates: undefined,
+      error: "Crop coordinates must be a JSON object.",
+    };
+  }
+
+  const left = Number(parsed.left);
+  const top = Number(parsed.top);
+  const width = Number(parsed.width);
+  const height = Number(parsed.height);
+
+  if (
+    !Number.isFinite(left) ||
+    !Number.isFinite(top) ||
+    !Number.isFinite(width) ||
+    !Number.isFinite(height)
+  ) {
+    return {
+      value,
+      coordinates: undefined,
+      error: "Crop coordinates require numeric left, top, width, and height.",
+    };
+  }
+
+  if (width <= 0 || height <= 0) {
+    return {
+      value,
+      coordinates: undefined,
+      error: "Crop width and height must be positive.",
+    };
+  }
+
+  if (
+    left < 0 ||
+    top < 0 ||
+    left + width > 1 + CROP_COORDINATE_EPSILON ||
+    top + height > 1 + CROP_COORDINATE_EPSILON
+  ) {
+    return {
+      value,
+      coordinates: undefined,
+      error:
+        "Crop coordinates must stay within image bounds (fractional 0 to 1 values).",
+    };
+  }
+
+  const sourceWidth =
+    parsed.sourceWidth === undefined ? undefined : Number(parsed.sourceWidth);
+  const sourceHeight =
+    parsed.sourceHeight === undefined ? undefined : Number(parsed.sourceHeight);
+
+  if (
+    (sourceWidth !== undefined &&
+      (!Number.isFinite(sourceWidth) || sourceWidth <= 0)) ||
+    (sourceHeight !== undefined &&
+      (!Number.isFinite(sourceHeight) || sourceHeight <= 0))
+  ) {
+    return {
+      value,
+      coordinates: undefined,
+      error: "Crop coordinates source dimensions must be positive numbers.",
+    };
+  }
+
+  return {
+    value,
+    coordinates: {
+      ...parsed,
+      left: clamp(left, 0, 1),
+      top: clamp(top, 0, 1),
+      width: clamp(width, 0, 1),
+      height: clamp(height, 0, 1),
+      ...(sourceWidth !== undefined ? { sourceWidth } : {}),
+      ...(sourceHeight !== undefined ? { sourceHeight } : {}),
+    },
+    error: null,
+  };
+}
+
+function createDefaultCropRect({
+  sourceAspectRatio,
+  targetAspectRatio,
+  anchorBias,
+}) {
+  if (!Number.isFinite(sourceAspectRatio) || sourceAspectRatio <= 0) {
+    return null;
+  }
+
+  const safeTargetAspectRatio = clamp(
+    targetAspectRatio || sourceAspectRatio,
+    0.2,
+    5,
+  );
+  const normalizedTargetAspectRatio = safeTargetAspectRatio / sourceAspectRatio;
+  let width = 1;
+  let height = 1;
+
+  if (normalizedTargetAspectRatio >= 1) {
+    height = 1 / normalizedTargetAspectRatio;
+  } else {
+    width = normalizedTargetAspectRatio;
+  }
+
+  width = clamp(width, MIN_CROP_SIZE_FRACTION, 1);
+  height = clamp(height, MIN_CROP_SIZE_FRACTION, 1);
+
+  const biasX = clamp(anchorBias?.x ?? 0.5, 0, 1);
+  const biasY = clamp(anchorBias?.y ?? 0.5, 0, 1);
+
+  return {
+    left: clamp((1 - width) * biasX, 0, 1 - width),
+    top: clamp((1 - height) * biasY, 0, 1 - height),
+    width,
+    height,
+  };
+}
+
+function buildCropRectFromDragPoints({
+  startPoint,
+  currentPoint,
+  lockedAspectRatio,
+  minSize = MIN_CROP_SIZE_FRACTION,
+}) {
+  const directionX = currentPoint.x >= startPoint.x ? 1 : -1;
+  const directionY = currentPoint.y >= startPoint.y ? 1 : -1;
+  const maxWidth = directionX > 0 ? 1 - startPoint.x : startPoint.x;
+  const maxHeight = directionY > 0 ? 1 - startPoint.y : startPoint.y;
+
+  let width = clamp(Math.abs(currentPoint.x - startPoint.x), 0, maxWidth);
+  let height = clamp(Math.abs(currentPoint.y - startPoint.y), 0, maxHeight);
+
+  if (Number.isFinite(lockedAspectRatio) && lockedAspectRatio > 0) {
+    if (width === 0 && height > 0) {
+      width = height * lockedAspectRatio;
+    } else if (height === 0 && width > 0) {
+      height = width / lockedAspectRatio;
+    }
+
+    if (width > 0 && height > 0) {
+      if (width / height > lockedAspectRatio) {
+        width = height * lockedAspectRatio;
+      } else {
+        height = width / lockedAspectRatio;
+      }
+    }
+
+    if (width > maxWidth) {
+      width = maxWidth;
+      height = width / lockedAspectRatio;
+    }
+
+    if (height > maxHeight) {
+      height = maxHeight;
+      width = height * lockedAspectRatio;
+    }
+  }
+
+  if (width < minSize || height < minSize) {
+    return null;
+  }
+
+  const left = directionX > 0 ? startPoint.x : startPoint.x - width;
+  const top = directionY > 0 ? startPoint.y : startPoint.y - height;
+
+  return {
+    left: clamp(left, 0, Math.max(1 - width, 0)),
+    top: clamp(top, 0, Math.max(1 - height, 0)),
+    width: clamp(width, minSize, 1),
+    height: clamp(height, minSize, 1),
+  };
+}
+
+function isPointInsideCropRect(point, cropRect) {
+  if (!point || !cropRect) {
+    return false;
+  }
+
+  return (
+    point.x >= cropRect.left &&
+    point.x <= cropRect.left + cropRect.width &&
+    point.y >= cropRect.top &&
+    point.y <= cropRect.top + cropRect.height
+  );
+}
+
+function areCropRectsEquivalent(firstRect, secondRect, epsilon = 0.0001) {
+  if (!firstRect || !secondRect) {
+    return false;
+  }
+
+  return (
+    Math.abs(firstRect.left - secondRect.left) <= epsilon &&
+    Math.abs(firstRect.top - secondRect.top) <= epsilon &&
+    Math.abs(firstRect.width - secondRect.width) <= epsilon &&
+    Math.abs(firstRect.height - secondRect.height) <= epsilon
+  );
+}
+
+function deriveAnchorHintFromCropRect(cropRect) {
+  if (!cropRect) {
+    return "center";
+  }
+
+  const centerX = cropRect.left + cropRect.width / 2;
+  const centerY = cropRect.top + cropRect.height / 2;
+  const distanceFromCenterX = centerX - 0.5;
+  const distanceFromCenterY = centerY - 0.5;
+
+  if (
+    Math.max(
+      Math.abs(distanceFromCenterX),
+      Math.abs(distanceFromCenterY),
+    ) <= 0.12
+  ) {
+    return "center";
+  }
+
+  if (Math.abs(distanceFromCenterX) > Math.abs(distanceFromCenterY)) {
+    return distanceFromCenterX < 0 ? "left" : "right";
+  }
+
+  return distanceFromCenterY < 0 ? "top" : "bottom";
+}
+
 function buildCropOptionPayload(values) {
   const targetAspectRatio = normalizeTargetAspectRatio(
     values.targetAspectRatio,
@@ -350,6 +535,7 @@ function buildCropOptionPayload(values) {
   );
   const anchorHint = normalizeAnchorHint(values.anchorHint);
   const filters = normalizeFilters(values.filters);
+  const cropCoordinates = normalizeCropCoordinates(values.cropCoordinates);
 
   const errors = [
     targetAspectRatio.error,
@@ -359,6 +545,7 @@ function buildCropOptionPayload(values) {
     marginLeft.error,
     anchorHint.error,
     filters.error,
+    cropCoordinates.error,
   ].filter(Boolean);
 
   return {
@@ -373,6 +560,7 @@ function buildCropOptionPayload(values) {
       filters: filters.normalizedFilters.length
         ? filters.normalizedFilters
         : undefined,
+      cropCoordinates: cropCoordinates.coordinates,
     },
   };
 }
@@ -501,6 +689,7 @@ export const action = async ({ request }) => {
     marginLeft: String(formData.get("margin_left") || ""),
     anchorHint: String(formData.get("anchor_hint") || ""),
     filters: String(formData.get("filters") || ""),
+    cropCoordinates: String(formData.get("crop_coordinates") || ""),
   });
 
   if (optionPayload.errors.length) {
@@ -656,6 +845,8 @@ export default function CropImagePage() {
 
   const inputRef = useRef(null);
   const previewUrlRef = useRef("");
+  const previewStageRef = useRef(null);
+  const cropInteractionRef = useRef(null);
   const preferencesHydratedRef = useRef(false);
   const [fileError, setFileError] = useState("");
   const [selectedFiles, setSelectedFiles] = useState([]);
@@ -665,17 +856,11 @@ export default function CropImagePage() {
     height: 0,
   });
   const [selectedPreset, setSelectedPreset] = useState("auto");
-  const [advancedMethodOverrideEnabled, setAdvancedMethodOverrideEnabled] =
-    useState(false);
-  const [advancedMethod, setAdvancedMethod] = useState("auto");
-  const [targetAspectRatioInput, setTargetAspectRatioInput] = useState("");
-  const [marginTopInput, setMarginTopInput] = useState("");
-  const [marginRightInput, setMarginRightInput] = useState("");
-  const [marginBottomInput, setMarginBottomInput] = useState("");
-  const [marginLeftInput, setMarginLeftInput] = useState("");
-  const [anchorHintInput, setAnchorHintInput] = useState("auto");
-  const [filtersInput, setFiltersInput] = useState("");
-  const [advancedValidationError, setAdvancedValidationError] = useState("");
+  const [previewCropRect, setPreviewCropRect] = useState(null);
+  const [isCropDirty, setIsCropDirty] = useState(false);
+  const [lockPresetAspectRatio, setLockPresetAspectRatio] = useState(true);
+  const [cropValidationError, setCropValidationError] = useState("");
+  const [isCropPointerActive, setIsCropPointerActive] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
 
@@ -683,10 +868,6 @@ export default function CropImagePage() {
     if (typeof window === "undefined") {
       return;
     }
-
-    const allowedMethods = CROP_METHODS.filter((method) =>
-      planUsage.allowsFaceDetection ? true : method.value === "auto",
-    ).map((method) => method.value);
 
     try {
       const savedPreferences = window.localStorage.getItem(
@@ -708,21 +889,6 @@ export default function CropImagePage() {
       ) {
         setSelectedPreset(parsedPreferences.selectedPreset);
       }
-
-      if (
-        typeof parsedPreferences.advancedMethodOverrideEnabled === "boolean"
-      ) {
-        setAdvancedMethodOverrideEnabled(
-          parsedPreferences.advancedMethodOverrideEnabled,
-        );
-      }
-
-      if (
-        typeof parsedPreferences.advancedMethod === "string" &&
-        allowedMethods.includes(parsedPreferences.advancedMethod)
-      ) {
-        setAdvancedMethod(parsedPreferences.advancedMethod);
-      }
     } catch (error) {
       console.warn("Failed to hydrate crop preferences from local storage", {
         error: error instanceof Error ? error.message : String(error),
@@ -730,17 +896,7 @@ export default function CropImagePage() {
     } finally {
       preferencesHydratedRef.current = true;
     }
-  }, [planUsage.allowsFaceDetection]);
-
-  useEffect(() => {
-    const allowedMethods = CROP_METHODS.filter((method) =>
-      planUsage.allowsFaceDetection ? true : method.value === "auto",
-    ).map((method) => method.value);
-
-    if (!allowedMethods.includes(advancedMethod)) {
-      setAdvancedMethod("auto");
-    }
-  }, [advancedMethod, planUsage.allowsFaceDetection]);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined" || !preferencesHydratedRef.current) {
@@ -751,11 +907,9 @@ export default function CropImagePage() {
       PREFERENCE_STORAGE_KEY,
       JSON.stringify({
         selectedPreset,
-        advancedMethodOverrideEnabled,
-        advancedMethod,
       }),
     );
-  }, [advancedMethod, advancedMethodOverrideEnabled, selectedPreset]);
+  }, [selectedPreset]);
 
   const showToast = useCallback(
     (message, options) => {
@@ -799,12 +953,18 @@ export default function CropImagePage() {
     if (!firstFile) {
       setPreviewFile(null);
       setPreviewDimensions({ width: 0, height: 0 });
+      setPreviewCropRect(null);
+      setIsCropDirty(false);
+      setCropValidationError("");
       return;
     }
 
     const previewUrl = URL.createObjectURL(firstFile);
     previewUrlRef.current = previewUrl;
     setPreviewDimensions({ width: 0, height: 0 });
+    setPreviewCropRect(null);
+    setIsCropDirty(false);
+    setCropValidationError("");
     setPreviewFile({
       name: firstFile.name,
       src: previewUrl,
@@ -836,122 +996,271 @@ export default function CropImagePage() {
   const selectedPresetConfig =
     PRESET_OPTIONS.find((preset) => preset.value === selectedPreset) ||
     PRESET_OPTIONS[0];
-  const selectedMethod = advancedMethodOverrideEnabled
-    ? advancedMethod
-    : selectedPresetConfig.method;
+  const selectedMethod = selectedPresetConfig.method;
   const selectedMethodDetails =
     CROP_METHODS.find((method) => method.value === selectedMethod) ||
     CROP_METHODS[0];
-  const advancedOptionValidation = useMemo(
-    () =>
-      buildCropOptionPayload({
-        targetAspectRatio: targetAspectRatioInput,
-        marginTop: marginTopInput,
-        marginRight: marginRightInput,
-        marginBottom: marginBottomInput,
-        marginLeft: marginLeftInput,
-        anchorHint: anchorHintInput,
-        filters: filtersInput,
-      }),
-    [
-      anchorHintInput,
-      filtersInput,
-      marginBottomInput,
-      marginLeftInput,
-      marginRightInput,
-      marginTopInput,
-      targetAspectRatioInput,
-    ],
+  const sourceAspectRatio =
+    previewDimensions.width > 0 && previewDimensions.height > 0
+      ? previewDimensions.width / previewDimensions.height
+      : null;
+  const hintedTargetAspectRatio =
+    sourceAspectRatio &&
+    clamp(
+      PRESET_ASPECT_RATIO_HINTS[selectedPreset] ||
+        METHOD_ASPECT_RATIO_HINTS[selectedMethod] ||
+        sourceAspectRatio,
+      0.2,
+      5,
+    );
+  const normalizedLockedAspectRatio =
+    lockPresetAspectRatio &&
+    sourceAspectRatio &&
+    hintedTargetAspectRatio &&
+    clamp(hintedTargetAspectRatio / sourceAspectRatio, 0.05, 20);
+
+  const defaultPreviewCropRect = useMemo(() => {
+    if (!sourceAspectRatio || !hintedTargetAspectRatio) {
+      return null;
+    }
+
+    return createDefaultCropRect({
+      sourceAspectRatio,
+      targetAspectRatio: hintedTargetAspectRatio,
+      anchorBias: getPreviewAnchorBias("auto", selectedMethod),
+    });
+  }, [hintedTargetAspectRatio, selectedMethod, sourceAspectRatio]);
+
+  useEffect(() => {
+    if (!previewFile || !defaultPreviewCropRect) {
+      setPreviewCropRect(null);
+      setIsCropDirty(false);
+      return;
+    }
+
+    setPreviewCropRect((previousRect) => {
+      if (isCropDirty && previousRect) {
+        return previousRect;
+      }
+
+      if (areCropRectsEquivalent(previousRect, defaultPreviewCropRect)) {
+        return previousRect;
+      }
+
+      return defaultPreviewCropRect;
+    });
+  }, [defaultPreviewCropRect, isCropDirty, previewFile]);
+
+  const getNormalizedPointerPosition = useCallback((event) => {
+    const stage = previewStageRef.current;
+    if (!stage) {
+      return null;
+    }
+
+    const bounds = stage.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) {
+      return null;
+    }
+
+    return {
+      x: clamp((event.clientX - bounds.left) / bounds.width, 0, 1),
+      y: clamp((event.clientY - bounds.top) / bounds.height, 0, 1),
+    };
+  }, []);
+
+  const handleCropPointerDown = useCallback(
+    (event) => {
+      if (event.button !== 0) {
+        return;
+      }
+
+      const pointerPoint = getNormalizedPointerPosition(event);
+      if (!pointerPoint) {
+        return;
+      }
+
+      const isMoveInteraction = isPointInsideCropRect(
+        pointerPoint,
+        previewCropRect,
+      );
+
+      cropInteractionRef.current = isMoveInteraction
+        ? {
+            pointerId: event.pointerId,
+            mode: "move",
+            startRect: previewCropRect,
+            offsetX: pointerPoint.x - previewCropRect.left,
+            offsetY: pointerPoint.y - previewCropRect.top,
+          }
+        : {
+            pointerId: event.pointerId,
+            mode: "draw",
+            startPoint: pointerPoint,
+          };
+
+      setIsCropPointerActive(true);
+      setIsCropDirty(true);
+      setCropValidationError("");
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+      event.preventDefault();
+    },
+    [getNormalizedPointerPosition, previewCropRect],
   );
+
+  const handleCropPointerMove = useCallback(
+    (event) => {
+      const interaction = cropInteractionRef.current;
+      if (!interaction || interaction.pointerId !== event.pointerId) {
+        return;
+      }
+
+      const pointerPoint = getNormalizedPointerPosition(event);
+      if (!pointerPoint) {
+        return;
+      }
+
+      if (interaction.mode === "move" && interaction.startRect) {
+        setPreviewCropRect({
+          ...interaction.startRect,
+          left: clamp(
+            pointerPoint.x - interaction.offsetX,
+            0,
+            1 - interaction.startRect.width,
+          ),
+          top: clamp(
+            pointerPoint.y - interaction.offsetY,
+            0,
+            1 - interaction.startRect.height,
+          ),
+        });
+        return;
+      }
+
+      const nextRect = buildCropRectFromDragPoints({
+        startPoint: interaction.startPoint,
+        currentPoint: pointerPoint,
+        lockedAspectRatio: normalizedLockedAspectRatio || null,
+      });
+
+      if (nextRect) {
+        setPreviewCropRect(nextRect);
+      }
+    },
+    [getNormalizedPointerPosition, normalizedLockedAspectRatio],
+  );
+
+  const finishCropPointerInteraction = useCallback((event) => {
+    const interaction = cropInteractionRef.current;
+    if (!interaction || interaction.pointerId !== event.pointerId) {
+      return;
+    }
+
+    cropInteractionRef.current = null;
+    setIsCropPointerActive(false);
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+
+  const handleCropPointerCaptureLost = useCallback(() => {
+    cropInteractionRef.current = null;
+    setIsCropPointerActive(false);
+  }, []);
+
   const cropPreviewModel = useMemo(() => {
     if (
-      !previewFile ||
-      previewDimensions.width <= 0 ||
-      previewDimensions.height <= 0
+      !previewCropRect ||
+      !sourceAspectRatio ||
+      previewCropRect.height <= 0 ||
+      previewCropRect.width <= 0
     ) {
       return null;
     }
 
-    const sourceAspectRatio = previewDimensions.width / previewDimensions.height;
-    const explicitAspectRatio = parseAspectRatioValue(targetAspectRatioInput);
-    const hintedAspectRatio =
-      PRESET_ASPECT_RATIO_HINTS[selectedPreset] ||
-      METHOD_ASPECT_RATIO_HINTS[selectedMethod] ||
-      sourceAspectRatio;
-    const targetAspectRatio = clamp(
-      explicitAspectRatio || hintedAspectRatio || sourceAspectRatio,
-      0.2,
-      5,
-    );
-
-    const rawMargins = {
-      top: normalizePreviewMarginFraction(marginTopInput),
-      right: normalizePreviewMarginFraction(marginRightInput),
-      bottom: normalizePreviewMarginFraction(marginBottomInput),
-      left: normalizePreviewMarginFraction(marginLeftInput),
+    return {
+      ...previewCropRect,
+      targetAspectRatio: clamp(
+        (previewCropRect.width / previewCropRect.height) * sourceAspectRatio,
+        0.2,
+        5,
+      ),
     };
+  }, [previewCropRect, sourceAspectRatio]);
 
-    const horizontalTotal = rawMargins.left + rawMargins.right;
-    const verticalTotal = rawMargins.top + rawMargins.bottom;
-    const horizontalScale = horizontalTotal > 0.9 ? 0.9 / horizontalTotal : 1;
-    const verticalScale = verticalTotal > 0.9 ? 0.9 / verticalTotal : 1;
-
-    const margins = {
-      top: rawMargins.top * verticalScale,
-      right: rawMargins.right * horizontalScale,
-      bottom: rawMargins.bottom * verticalScale,
-      left: rawMargins.left * horizontalScale,
-    };
-
-    const availableWidth = Math.max(1 - margins.left - margins.right, 0.05);
-    const availableHeight = Math.max(1 - margins.top - margins.bottom, 0.05);
-    const availableAspectRatio = availableWidth / availableHeight;
-
-    let cropWidth = availableWidth;
-    let cropHeight = availableHeight;
-
-    if (availableAspectRatio > targetAspectRatio) {
-      cropWidth = availableHeight * targetAspectRatio;
-    } else {
-      cropHeight = availableWidth / targetAspectRatio;
+  const cropOptionFields = useMemo(() => {
+    if (!cropPreviewModel || previewDimensions.width <= 0 || previewDimensions.height <= 0) {
+      return {
+        targetAspectRatio: "",
+        marginTop: "",
+        marginRight: "",
+        marginBottom: "",
+        marginLeft: "",
+        anchorHint: "center",
+        cropCoordinates: "",
+      };
     }
 
-    const minLeft = margins.left;
-    const minTop = margins.top;
-    const maxLeft = Math.max(minLeft, 1 - margins.right - cropWidth);
-    const maxTop = Math.max(minTop, 1 - margins.bottom - cropHeight);
-    const anchorBias = getPreviewAnchorBias(anchorHintInput, selectedMethod);
-    const left = clamp(
-      minLeft + (maxLeft - minLeft) * anchorBias.x,
-      minLeft,
-      maxLeft,
+    const toFieldString = (value) => Number(value.toFixed(4)).toString();
+    const marginTop = clamp(cropPreviewModel.top, 0, 1);
+    const marginLeft = clamp(cropPreviewModel.left, 0, 1);
+    const marginRight = clamp(
+      1 - cropPreviewModel.left - cropPreviewModel.width,
+      0,
+      1,
     );
-    const top = clamp(
-      minTop + (maxTop - minTop) * anchorBias.y,
-      minTop,
-      maxTop,
+    const marginBottom = clamp(
+      1 - cropPreviewModel.top - cropPreviewModel.height,
+      0,
+      1,
     );
 
     return {
-      left,
-      top,
-      width: cropWidth,
-      height: cropHeight,
-      targetAspectRatio,
+      targetAspectRatio: toFieldString(cropPreviewModel.targetAspectRatio),
+      marginTop: toFieldString(marginTop),
+      marginRight: toFieldString(marginRight),
+      marginBottom: toFieldString(marginBottom),
+      marginLeft: toFieldString(marginLeft),
+      anchorHint: deriveAnchorHintFromCropRect(cropPreviewModel),
+      cropCoordinates: JSON.stringify({
+        version: 1,
+        unit: "fraction",
+        mode: "manual-drag",
+        left: Number(cropPreviewModel.left.toFixed(6)),
+        top: Number(cropPreviewModel.top.toFixed(6)),
+        width: Number(cropPreviewModel.width.toFixed(6)),
+        height: Number(cropPreviewModel.height.toFixed(6)),
+        sourceWidth: previewDimensions.width,
+        sourceHeight: previewDimensions.height,
+      }),
     };
-  }, [
-    anchorHintInput,
-    marginBottomInput,
-    marginLeftInput,
-    marginRightInput,
-    marginTopInput,
-    previewDimensions.height,
-    previewDimensions.width,
-    previewFile,
-    selectedMethod,
-    selectedPreset,
-    targetAspectRatioInput,
-  ]);
+  }, [cropPreviewModel, previewDimensions.height, previewDimensions.width]);
+
+  const cropOptionValidation = useMemo(
+    () =>
+      buildCropOptionPayload({
+        targetAspectRatio: cropOptionFields.targetAspectRatio,
+        marginTop: cropOptionFields.marginTop,
+        marginRight: cropOptionFields.marginRight,
+        marginBottom: cropOptionFields.marginBottom,
+        marginLeft: cropOptionFields.marginLeft,
+        anchorHint: cropOptionFields.anchorHint,
+        filters: "",
+        cropCoordinates: cropOptionFields.cropCoordinates,
+      }),
+    [cropOptionFields],
+  );
+
+  const cropCoordinateSummary = useMemo(() => {
+    if (!cropPreviewModel || previewDimensions.width <= 0 || previewDimensions.height <= 0) {
+      return null;
+    }
+
+    return {
+      leftPx: Math.round(cropPreviewModel.left * previewDimensions.width),
+      topPx: Math.round(cropPreviewModel.top * previewDimensions.height),
+      widthPx: Math.round(cropPreviewModel.width * previewDimensions.width),
+      heightPx: Math.round(cropPreviewModel.height * previewDimensions.height),
+    };
+  }, [cropPreviewModel, previewDimensions.height, previewDimensions.width]);
+
   const cropOverlayStyle = useMemo(() => {
     if (!cropPreviewModel) {
       return null;
@@ -984,6 +1293,12 @@ export default function CropImagePage() {
     return formatRatioPreviewLabel(cropPreviewModel.targetAspectRatio);
   }, [cropPreviewModel]);
 
+  const resetPreviewCrop = useCallback(() => {
+    setIsCropDirty(false);
+    setCropValidationError("");
+    setPreviewCropRect(defaultPreviewCropRect);
+  }, [defaultPreviewCropRect]);
+
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1006,14 +1321,22 @@ export default function CropImagePage() {
       return;
     }
 
-    if (advancedOptionValidation.errors.length) {
-      const message = advancedOptionValidation.errors.join(" ");
-      setAdvancedValidationError(message);
+    if (!cropPreviewModel) {
+      const message =
+        "Preview crop is not ready yet. Wait for the image preview to load.";
+      setCropValidationError(message);
       showToast(message, { isError: true });
       return;
     }
 
-    setAdvancedValidationError("");
+    if (cropOptionValidation.errors.length) {
+      const message = cropOptionValidation.errors.join(" ");
+      setCropValidationError(message);
+      showToast(message, { isError: true });
+      return;
+    }
+
+    setCropValidationError("");
     setIsSubmittingDownload(true);
     showToast("Cropping started. Preparing your ZIP download...");
 
@@ -1023,18 +1346,18 @@ export default function CropImagePage() {
       }
 
       const formData = new FormData(form);
-      const explicitTargetAspectRatio = String(
-        formData.get("target_aspect_ratio") || "",
-      ).trim();
+      formData.set("target_aspect_ratio", cropOptionFields.targetAspectRatio);
+      formData.set("margin_top", cropOptionFields.marginTop);
+      formData.set("margin_right", cropOptionFields.marginRight);
+      formData.set("margin_bottom", cropOptionFields.marginBottom);
+      formData.set("margin_left", cropOptionFields.marginLeft);
+      formData.set("anchor_hint", cropOptionFields.anchorHint);
+      formData.delete("filters");
 
-      if (!explicitTargetAspectRatio) {
-        const fallbackTargetAspectRatio =
-          PRESET_TARGET_ASPECT_RATIO_DEFAULTS[selectedPreset] ||
-          METHOD_TARGET_ASPECT_RATIO_DEFAULTS[selectedMethod];
-
-        if (fallbackTargetAspectRatio) {
-          formData.set("target_aspect_ratio", fallbackTargetAspectRatio);
-        }
+      if (cropOptionFields.cropCoordinates) {
+        formData.set("crop_coordinates", cropOptionFields.cropCoordinates);
+      } else {
+        formData.delete("crop_coordinates");
       }
 
       const idToken = await shopify.idToken();
@@ -1440,7 +1763,7 @@ export default function CropImagePage() {
 
             <details>
               <summary>
-                <strong>Layer 3 — Power user (advanced)</strong>
+                <strong>Layer 3 - Drag to crop</strong>
               </summary>
               <s-box
                 padding="base"
@@ -1450,143 +1773,80 @@ export default function CropImagePage() {
               >
                 <s-stack direction="block" gap="small">
                   <s-text tone="subdued">
-                    Fine-tune crop strategy for repeatable workflows. Collapsed
-                    by default to keep first-run setup simple.
+                    Draw a crop box directly on the preview. Drag inside the
+                    box to move it.
                   </s-text>
                   <label>
                     <input
                       type="checkbox"
-                      checked={advancedMethodOverrideEnabled}
+                      checked={lockPresetAspectRatio}
                       onChange={(event) =>
-                        setAdvancedMethodOverrideEnabled(
-                          event.currentTarget.checked,
-                        )
+                        setLockPresetAspectRatio(event.currentTarget.checked)
                       }
                     />{" "}
-                    Override preset method
+                    Lock ratio to preset (
+                    {formatRatioPreviewLabel(hintedTargetAspectRatio || 0)})
                   </label>
-                  <label htmlFor="method">Crop method</label>
-                  <select
-                    id="method"
-                    value={advancedMethod}
-                    disabled={!advancedMethodOverrideEnabled}
-                    onChange={(event) =>
-                      setAdvancedMethod(event.currentTarget.value)
-                    }
-                  >
-                    {CROP_METHODS.filter((method) =>
-                      planUsage.allowsFaceDetection
-                        ? true
-                        : method.value === "auto",
-                    ).map((method) => (
-                      <option key={method.value} value={method.value}>
-                        {method.value}
-                      </option>
-                    ))}
-                  </select>
-
-                  <label htmlFor="target_aspect_ratio">
-                    Target aspect ratio
-                  </label>
-                  <input
-                    id="target_aspect_ratio"
-                    name="target_aspect_ratio"
-                    type="text"
-                    placeholder="e.g. 4:5 or 1.5"
-                    value={targetAspectRatioInput}
-                    onChange={(event) =>
-                      setTargetAspectRatioInput(event.currentTarget.value)
-                    }
-                  />
-
-                  <s-text tone="subdued">
-                    Margins/padding (non-negative numbers)
-                  </s-text>
                   <s-stack direction="inline" gap="small" wrap>
-                    <input
-                      name="margin_top"
-                      aria-label="Top margin or padding"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Top"
-                      value={marginTopInput}
-                      onChange={(event) =>
-                        setMarginTopInput(event.currentTarget.value)
-                      }
-                    />
-                    <input
-                      name="margin_right"
-                      aria-label="Right margin or padding"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Right"
-                      value={marginRightInput}
-                      onChange={(event) =>
-                        setMarginRightInput(event.currentTarget.value)
-                      }
-                    />
-                    <input
-                      name="margin_bottom"
-                      aria-label="Bottom margin or padding"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Bottom"
-                      value={marginBottomInput}
-                      onChange={(event) =>
-                        setMarginBottomInput(event.currentTarget.value)
-                      }
-                    />
-                    <input
-                      name="margin_left"
-                      aria-label="Left margin or padding"
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="Left"
-                      value={marginLeftInput}
-                      onChange={(event) =>
-                        setMarginLeftInput(event.currentTarget.value)
-                      }
-                    />
+                    <s-button
+                      type="button"
+                      variant="secondary"
+                      onClick={resetPreviewCrop}
+                      disabled={!defaultPreviewCropRect}
+                    >
+                      Reset crop
+                    </s-button>
+                    {cropCoordinateSummary && (
+                      <s-text tone="subdued">
+                        X:{cropCoordinateSummary.leftPx}px Y:
+                        {cropCoordinateSummary.topPx}px W:
+                        {cropCoordinateSummary.widthPx}px H:
+                        {cropCoordinateSummary.heightPx}px
+                      </s-text>
+                    )}
                   </s-stack>
-
-                  <label htmlFor="anchor_hint">Anchor hint</label>
-                  <select
-                    id="anchor_hint"
-                    name="anchor_hint"
-                    value={anchorHintInput}
-                    onChange={(event) =>
-                      setAnchorHintInput(event.currentTarget.value)
-                    }
-                  >
-                    {ANCHOR_HINT_OPTIONS.map((hint) => (
-                      <option key={hint} value={hint}>
-                        {hint}
-                      </option>
-                    ))}
-                  </select>
-
-                  <label htmlFor="filters">Optional filters</label>
-                  <input
-                    id="filters"
-                    name="filters"
-                    type="text"
-                    placeholder="comma-separated: sharpen, detail, grayscale"
-                    value={filtersInput}
-                    onChange={(event) =>
-                      setFiltersInput(event.currentTarget.value)
-                    }
-                  />
-
-                  {advancedValidationError && (
-                    <s-text tone="critical">{advancedValidationError}</s-text>
+                  {cropValidationError && (
+                    <s-text tone="critical">{cropValidationError}</s-text>
                   )}
                 </s-stack>
               </s-box>
             </details>
+
+            <input
+              type="hidden"
+              name="target_aspect_ratio"
+              value={cropOptionFields.targetAspectRatio}
+            />
+            <input
+              type="hidden"
+              name="margin_top"
+              value={cropOptionFields.marginTop}
+            />
+            <input
+              type="hidden"
+              name="margin_right"
+              value={cropOptionFields.marginRight}
+            />
+            <input
+              type="hidden"
+              name="margin_bottom"
+              value={cropOptionFields.marginBottom}
+            />
+            <input
+              type="hidden"
+              name="margin_left"
+              value={cropOptionFields.marginLeft}
+            />
+            <input
+              type="hidden"
+              name="anchor_hint"
+              value={cropOptionFields.anchorHint}
+            />
+            <input
+              type="hidden"
+              name="crop_coordinates"
+              value={cropOptionFields.cropCoordinates}
+            />
 
             <s-box padding="base" border="base" borderRadius="base">
               <s-text fontWeight="semibold">Current crop strategy</s-text>
@@ -1676,7 +1936,23 @@ export default function CropImagePage() {
               </s-text>
             )}
             <div className="crop-preview-grid">
-              <div className="crop-preview-stage">
+              <div
+                className="crop-preview-stage"
+                ref={previewStageRef}
+                onPointerDown={handleCropPointerDown}
+                onPointerMove={handleCropPointerMove}
+                onPointerUp={finishCropPointerInteraction}
+                onPointerCancel={finishCropPointerInteraction}
+                onLostPointerCapture={handleCropPointerCaptureLost}
+                style={{
+                  cursor: isCropPointerActive
+                    ? "grabbing"
+                    : cropPreviewModel
+                      ? "grab"
+                      : "crosshair",
+                  touchAction: "none",
+                }}
+              >
                 <img
                   src={previewFile.src}
                   alt={`Preview for ${previewFile.name}`}
@@ -1732,16 +2008,12 @@ export default function CropImagePage() {
               syncPreviewFile([]);
               setFileError("");
               setSelectedPreset("auto");
-              setAdvancedMethodOverrideEnabled(false);
-              setAdvancedMethod("auto");
-              setTargetAspectRatioInput("");
-              setMarginTopInput("");
-              setMarginRightInput("");
-              setMarginBottomInput("");
-              setMarginLeftInput("");
-              setAnchorHintInput("auto");
-              setFiltersInput("");
-              setAdvancedValidationError("");
+              setLockPresetAspectRatio(true);
+              setPreviewCropRect(null);
+              setIsCropDirty(false);
+              setCropValidationError("");
+              setIsCropPointerActive(false);
+              cropInteractionRef.current = null;
               inputRef.current?.form?.reset();
               inputRef.current?.focus();
             }}

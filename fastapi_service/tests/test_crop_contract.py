@@ -2,6 +2,7 @@ from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from PIL import Image
 
 
 class _StubImage:
@@ -17,12 +18,19 @@ def test_parse_crop_options_normalizes_supported_inputs(fastapi_main_module):
         margin_bottom=0.3,
         margin_left=0.4,
         anchor_hint=" TOP ",
+        crop_coordinates='{"left":0.1,"top":0.2,"width":0.6,"height":0.7}',
         filters='["sharpen", "grayscale"]',
     )
 
     assert options.target_aspect_ratio == (4.0, 5.0)
     assert options.margins == (0.1, 0.2, 0.3, 0.4)
     assert options.anchor_hint == "top"
+    assert options.crop_coordinates == {
+        "left": 0.1,
+        "top": 0.2,
+        "width": 0.6,
+        "height": 0.7,
+    }
     assert options.filters == ["sharpen", "grayscale"]
 
 
@@ -103,6 +111,30 @@ def test_parse_filters_rejects_invalid_inputs(fastapi_main_module, raw_filters):
         fastapi_main_module._parse_filters(raw_filters)
 
     assert exc_info.value.status_code == 400
+
+
+def test_parse_crop_coordinates_rejects_invalid_json(fastapi_main_module):
+    with pytest.raises(HTTPException) as exc_info:
+        fastapi_main_module._parse_crop_coordinates("{")
+
+    assert exc_info.value.status_code == 400
+
+
+def test_apply_crop_postprocessing_manual_crop_coordinates_take_precedence(fastapi_main_module):
+    image = Image.new("RGB", (120, 80), "white")
+    crop_options = fastapi_main_module.CropOptions(
+        target_aspect_ratio=(1.0, 1.0),
+        margins=(0.1, 0.1, 0.1, 0.1),
+        crop_coordinates={
+            "left": 0.25,
+            "top": 0.25,
+            "width": 0.5,
+            "height": 0.5,
+        },
+    )
+
+    cropped = fastapi_main_module.apply_crop_postprocessing(image, crop_options)
+    assert cropped.size == (60, 40)
 
 
 @pytest.mark.parametrize(
