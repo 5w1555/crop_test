@@ -113,6 +113,49 @@ const METHOD_ASPECT_RATIO_HINTS = {
 const MIN_CROP_SIZE_FRACTION = 0.05;
 const CROP_COORDINATE_EPSILON = 0.001;
 
+function parseCropSummaryHeader(rawSummary) {
+  if (!rawSummary) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(rawSummary);
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    const successCount = Number(parsed.successCount);
+    const failedCount = Number(parsed.failedCount);
+    const elapsedSeconds = Number(parsed.elapsedSeconds);
+    const failedFiles = Array.isArray(parsed.failedFiles)
+      ? parsed.failedFiles
+          .map((entry) => {
+            if (typeof entry === "string") {
+              return entry;
+            }
+
+            if (entry && typeof entry === "object") {
+              if (typeof entry.filename === "string") return entry.filename;
+              if (typeof entry.file_name === "string") return entry.file_name;
+              if (typeof entry.name === "string") return entry.name;
+            }
+
+            return null;
+          })
+          .filter(Boolean)
+      : [];
+
+    return {
+      successCount: Number.isFinite(successCount) ? successCount : 0,
+      failedCount: Number.isFinite(failedCount) ? failedCount : 0,
+      elapsedSeconds: Number.isFinite(elapsedSeconds) ? elapsedSeconds : null,
+      failedFiles,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) {
     return min;
@@ -747,16 +790,21 @@ export const action = async ({ request }) => {
       };
 
       const manifest = parseManifestHeader();
-      const processedCount =
-        parseNumeric(response.headers.get("x-processed-count")) ??
-        parseNumeric(manifest?.processed_count) ??
-        parseNumeric(manifest?.processedCount) ??
-        files.length;
+      const failedFiles =
+        (Array.isArray(manifest?.failed_files) && manifest.failed_files) ||
+        (Array.isArray(manifest?.failedFiles) && manifest.failedFiles) ||
+        [];
       const failedCount =
         parseNumeric(response.headers.get("x-failed-count")) ??
         parseNumeric(manifest?.failed_count) ??
         parseNumeric(manifest?.failedCount) ??
-        Math.max(files.length - processedCount, 0);
+        failedFiles.length;
+      const processedCount =
+        parseNumeric(response.headers.get("x-processed-count")) ??
+        parseNumeric(manifest?.processed_count) ??
+        parseNumeric(manifest?.processedCount) ??
+        Math.max(files.length - failedCount, 0);
+      const successCount = Math.max(processedCount - failedCount, 0);
       const elapsedFromManifest =
         parseNumeric(response.headers.get("x-elapsed-ms")) ??
         parseNumeric(manifest?.elapsed_ms) ??
@@ -766,7 +814,9 @@ export const action = async ({ request }) => {
       return {
         requestedCount: files.length,
         processedCount,
+        successCount,
         failedCount,
+        failedFiles,
         elapsedMs: elapsedFromManifest ?? elapsedMs,
         manifest,
       };
@@ -786,7 +836,10 @@ export const action = async ({ request }) => {
       );
     }
 
-    await commitPlanUsage({ shop: session.shop, imageCount: files.length });
+    await commitPlanUsage({
+      shop: session.shop,
+      imageCount: metadataFromHeaders.successCount,
+    });
 
     const headers = new Headers({
       "content-type": response.headers.get("content-type") || "application/zip",
@@ -863,6 +916,9 @@ export default function CropImagePage() {
   const [isCropPointerActive, setIsCropPointerActive] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
+  const [isReadyToDownload, setIsReadyToDownload] = useState(false);
+  const [downloadResult, setDownloadResult] = useState(null);
+  const [downloadBlob, setDownloadBlob] = useState(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -943,6 +999,14 @@ export default function CropImagePage() {
     };
   }, []);
 
+  useEffect(() => {
+    return () => {
+      if (downloadBlob) {
+        URL.revokeObjectURL(downloadBlob.url);
+      }
+    };
+  }, [downloadBlob]);
+
   const syncPreviewFile = (nextFiles) => {
     if (previewUrlRef.current) {
       URL.revokeObjectURL(previewUrlRef.current);
@@ -1000,6 +1064,9 @@ export default function CropImagePage() {
   const selectedMethodDetails =
     CROP_METHODS.find((method) => method.value === selectedMethod) ||
     CROP_METHODS[0];
+  const isPlanBlockedByMethod =
+    !planUsage.allowsFaceDetection && selectedMethod !== "auto";
+  const blockedMethodUnlockPlan = PLAN_CONFIG.pro.label;
   const sourceAspectRatio =
     previewDimensions.width > 0 && previewDimensions.height > 0
       ? previewDimensions.width / previewDimensions.height
@@ -1338,7 +1405,13 @@ export default function CropImagePage() {
 
     setCropValidationError("");
     setIsSubmittingDownload(true);
-    showToast("Cropping started. Preparing your ZIP download...");
+    setIsReadyToDownload(false);
+    setDownloadResult(null);
+    if (downloadBlob) {
+      URL.revokeObjectURL(downloadBlob.url);
+      setDownloadBlob(null);
+    }
+    showToast("Cropping started. Processing images...");
 
     try {
       if (!shopify || typeof shopify.idToken !== "function") {
@@ -1391,18 +1464,17 @@ export default function CropImagePage() {
       const filenameMatch = disposition.match(/filename="([^"]+)"/i);
       const filename = filenameMatch?.[1] || "cropped_batch.zip";
       const blob = await response.blob();
-      const downloadUrl = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = downloadUrl;
-      anchor.download = filename;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => {
-        URL.revokeObjectURL(downloadUrl);
-      }, 1000);
+      const blobUrl = URL.createObjectURL(blob);
+      const summary = parseCropSummaryHeader(response.headers.get("x-crop-summary"));
 
-      showToast("Crop completed. ZIP download started.");
+      setDownloadBlob({
+        url: blobUrl,
+        filename,
+      });
+      setDownloadResult(summary);
+      setIsReadyToDownload(true);
+
+      showToast("Crop completed. Review results and download ZIP.");
     } catch (error) {
       showToast(
         error instanceof Error
@@ -1414,6 +1486,19 @@ export default function CropImagePage() {
       setIsSubmittingDownload(false);
     }
   };
+
+  const handleDownloadReadyZip = useCallback(() => {
+    if (!downloadBlob) {
+      return;
+    }
+
+    const anchor = document.createElement("a");
+    anchor.href = downloadBlob.url;
+    anchor.download = downloadBlob.filename;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+  }, [downloadBlob]);
 
   const getInventoryStatus = useCallback((inventoryCount) => {
     return Number(inventoryCount) > 0 ? "In stock" : "Out of stock";
@@ -1860,19 +1945,57 @@ export default function CropImagePage() {
                 <strong>{selectedMethodDetails.label}:</strong>{" "}
                 {selectedMethodDetails.description}
               </s-text>
+              {isPlanBlockedByMethod && (
+                <s-banner tone="warning">
+                  This preset uses <code>{selectedMethod}</code>, which is blocked on the Free plan. Upgrade to {blockedMethodUnlockPlan} to unlock this exact method.
+                  <div style={{ marginTop: "8px" }}>
+                    <s-link href="/app/billing">Upgrade to {blockedMethodUnlockPlan}</s-link>
+                  </div>
+                </s-banner>
+              )}
+            </s-box>
+
+            <s-box padding="base" border="base" borderRadius="base" background="bg-fill-secondary">
+              <s-text fontWeight="semibold">Quota remaining</s-text>
+              <s-text>{planUsage.remaining} images left this month</s-text>
             </s-box>
 
             <s-button
               type="submit"
               disabled={
-                !apiHealthy || !hasValidSelection || isSubmittingDownload
+                !apiHealthy ||
+                !hasValidSelection ||
+                isSubmittingDownload ||
+                isPlanBlockedByMethod
               }
               {...(isSubmittingDownload ? { loading: true } : {})}
             >
-              Auto-crop images
+              Process images
             </s-button>
 
-            {isSubmittingDownload && <s-text>Processing and streaming ZIP…</s-text>}
+            {isSubmittingDownload && <s-text>Processing images…</s-text>}
+            {isReadyToDownload && downloadBlob && (
+              <s-box padding="base" border="base" borderRadius="base">
+                <s-stack direction="block" gap="small">
+                  <s-text fontWeight="semibold">Batch results</s-text>
+                  <s-text>
+                    Success: {downloadResult?.successCount ?? 0} · Failed: {downloadResult?.failedCount ?? 0}
+                    {downloadResult?.elapsedSeconds !== null &&
+                    downloadResult?.elapsedSeconds !== undefined
+                      ? ` · ${downloadResult.elapsedSeconds}s`
+                      : ""}
+                  </s-text>
+                  {(downloadResult?.failedFiles?.length || 0) > 0 && (
+                    <s-text tone="critical">
+                      Failed files: {downloadResult.failedFiles.join(", ")}
+                    </s-text>
+                  )}
+                  <s-button type="button" onClick={handleDownloadReadyZip}>
+                    Download ZIP
+                  </s-button>
+                </s-stack>
+              </s-box>
+            )}
           </s-stack>
         </form>
       </s-section>
