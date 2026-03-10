@@ -1,6 +1,6 @@
 import { PRO_PLAN } from "./billing";
 
-const isBillingTestMode = process.env.SHOPIFY_BILLING_TEST_MODE === "true";
+export const isBillingTestMode = process.env.SHOPIFY_BILLING_TEST_MODE === "true";
 
 function getBillingReturnUrl(request) {
   const url = new URL(request.url);
@@ -23,5 +23,13 @@ export async function requestProPlan({ billing, request }) {
     plan: PRO_PLAN,
     isTest: isBillingTestMode,
     returnUrl: getBillingReturnUrl(request),
+  });
+}
+
+export async function cancelProPlan({ billing, subscriptionId }) {
+  return billing.cancel({
+    subscriptionId,
+    isTest: isBillingTestMode,
+    prorate: true,
   });
 }
