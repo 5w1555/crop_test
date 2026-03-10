@@ -1,7 +1,11 @@
 import { useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
-import { getBillingState, requestProPlan } from "../utils/billing.server";
+import {
+  cancelProPlan,
+  getBillingState,
+  requestProPlan,
+} from "../utils/billing.server";
 
 export const loader = async ({ request }) => {
   const { billing } = await authenticate.admin(request);
@@ -24,10 +28,9 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "cancel" && billingState.activeSubscription) {
-    await billing.cancel({
+    await cancelProPlan({
+      billing,
       subscriptionId: billingState.activeSubscription.id,
-      isTest: true,
-      prorate: true,
     });
   }
 
