@@ -93,6 +93,27 @@ def test_normalize_anchor_hint_rejects_invalid_value(fastapi_main_module):
 
 
 @pytest.mark.parametrize(
+    "raw_pipeline, expected",
+    [
+        (None, "auto"),
+        ("", "auto"),
+        (" Face ", "face"),
+        ("heuristic", "heuristic"),
+    ],
+)
+def test_normalize_pipeline_valid_cases(fastapi_main_module, raw_pipeline, expected):
+    assert fastapi_main_module._normalize_pipeline(raw_pipeline) == expected
+
+
+def test_normalize_pipeline_rejects_invalid_value(fastapi_main_module):
+    with pytest.raises(HTTPException) as exc_info:
+        fastapi_main_module._normalize_pipeline("bogus")
+
+    assert exc_info.value.status_code == 400
+    assert "pipeline must be one of" in exc_info.value.detail
+
+
+@pytest.mark.parametrize(
     "raw_filters, expected",
     [
         (None, None),
@@ -201,6 +222,81 @@ def test_run_crop_pipeline_rejects_unknown_method(monkeypatch, fastapi_main_modu
         fastapi_main_module.run_crop_pipeline("tmp.jpg", "unexpected", fastapi_main_module.CropOptions())
 
     assert exc_info.value.status_code == 400
+
+
+def test_run_crop_pipeline_rejects_unknown_pipeline(monkeypatch, fastapi_main_module):
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "get_face_and_landmarks",
+        lambda *args, **kwargs: ([1, 2, 3, 4], [[1, 1]], "cv", _StubImage(), {}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        fastapi_main_module.run_crop_pipeline(
+            "tmp.jpg",
+            "auto",
+            fastapi_main_module.CropOptions(),
+            pipeline="unexpected",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "pipeline must be one of" in exc_info.value.detail
+
+
+def test_run_crop_pipeline_uses_salience_pipeline_dispatch(monkeypatch, fastapi_main_module):
+    calls = {"center": 0, "frontal": 0}
+
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "get_face_and_landmarks",
+        lambda *args, **kwargs: ([1, 2, 3, 4], [[1, 1]], "cv", _StubImage(), {}),
+    )
+
+    def fake_center(*args, **kwargs):
+        calls["center"] += 1
+        return "center-result"
+
+    monkeypatch.setattr(fastapi_main_module, "center_content_crop", fake_center)
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "crop_frontal_image",
+        lambda *args, **kwargs: calls.__setitem__("frontal", calls["frontal"] + 1),
+    )
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "apply_crop_postprocessing",
+        lambda cropped, crop_options: cropped,
+    )
+
+    result = fastapi_main_module.run_crop_pipeline(
+        "tmp.jpg",
+        "auto",
+        fastapi_main_module.CropOptions(),
+        pipeline="salience",
+    )
+
+    assert result == "center-result"
+    assert calls["center"] == 1
+    assert calls["frontal"] == 0
+
+
+def test_run_crop_pipeline_rejects_unsupported_method_for_salience_pipeline(monkeypatch, fastapi_main_module):
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "get_face_and_landmarks",
+        lambda *args, **kwargs: ([1, 2, 3, 4], [[1, 1]], "cv", _StubImage(), {}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        fastapi_main_module.run_crop_pipeline(
+            "tmp.jpg",
+            "frontal",
+            fastapi_main_module.CropOptions(),
+            pipeline="salience",
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "not supported for pipeline 'salience'" in exc_info.value.detail
 
 
 def test_run_crop_pipeline_raises_runtime_error_when_crop_method_returns_none(monkeypatch, fastapi_main_module):
