@@ -88,6 +88,15 @@ When updating any pinned package (especially `insightface`, `onnxruntime`, `open
    - Keep rollback instructions ready (previous image/tag with previous `requirements.txt` lock).
 
 
+
+## Salience pipeline model loading
+
+- The `salience` pipeline runs U²-Net inference through ONNX Runtime on CPU.
+- Default model lookup path is `fastapi_service/models/u2net.onnx`.
+- You can override the path with `SMARTCROP_SALIENCE_MODEL_PATH` (absolute or relative path).
+- Loading is lazy and singleton-based: the model is initialized on the first `pipeline=salience` request and reused afterward.
+- If the model file is missing or inference fails, the service falls back to center-biased content crop behavior.
+
 ## API
 
 ### `POST /crop`

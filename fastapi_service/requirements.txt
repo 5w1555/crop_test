@@ -11,3 +11,4 @@ rawpy==0.26.1
 pydng==1.1.2
 insightface==0.7.3
 onnxruntime==1.19.2
+onnx==1.17.0
