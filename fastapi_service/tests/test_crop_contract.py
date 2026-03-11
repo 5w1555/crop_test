@@ -243,24 +243,62 @@ def test_run_crop_pipeline_rejects_unknown_pipeline(monkeypatch, fastapi_main_mo
     assert "pipeline must be one of" in exc_info.value.detail
 
 
-def test_run_crop_pipeline_uses_salience_pipeline_dispatch(monkeypatch, fastapi_main_module):
-    calls = {"center": 0, "frontal": 0}
+def test_run_crop_pipeline_uses_salience_candidate_box(monkeypatch, fastapi_main_module):
+    image = Image.new("RGB", (120, 100), "white")
 
     monkeypatch.setattr(
         fastapi_main_module,
         "get_face_and_landmarks",
-        lambda *args, **kwargs: ([1, 2, 3, 4], [[1, 1]], "cv", _StubImage(), {}),
+        lambda *args, **kwargs: ([1, 2, 3, 4], [[1, 1]], "cv", image, {}),
     )
-
-    def fake_center(*args, **kwargs):
-        calls["center"] += 1
-        return "center-result"
-
-    monkeypatch.setattr(fastapi_main_module, "center_content_crop", fake_center)
     monkeypatch.setattr(
         fastapi_main_module,
-        "crop_frontal_image",
-        lambda *args, **kwargs: calls.__setitem__("frontal", calls["frontal"] + 1),
+        "infer_salience_mask",
+        lambda *args, **kwargs: [[0.0]],
+    )
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "compute_candidate_crop_box",
+        lambda *args, **kwargs: (10, 10, 90, 80),
+    )
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "apply_crop_postprocessing",
+        lambda cropped, crop_options: cropped,
+    )
+
+    result = fastapi_main_module.run_crop_pipeline(
+        "tmp.jpg",
+        "auto",
+        fastapi_main_module.CropOptions(),
+        pipeline="salience",
+    )
+
+    assert result.size == (80, 70)
+
+
+def test_run_crop_pipeline_salience_falls_back_when_inference_fails(monkeypatch, fastapi_main_module):
+    image = Image.new("RGB", (120, 100), "white")
+
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "get_face_and_landmarks",
+        lambda *args, **kwargs: ([1, 2, 3, 4], [[1, 1]], "cv", image, {"meta": True}),
+    )
+
+    def _raise(*args, **kwargs):
+        raise RuntimeError("no model")
+
+    monkeypatch.setattr(fastapi_main_module, "infer_salience_mask", _raise)
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "compute_candidate_crop_box",
+        lambda *args, **kwargs: None,
+    )
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "center_content_crop",
+        lambda pil_img, metadata=None: "center-result",
     )
     monkeypatch.setattr(
         fastapi_main_module,
@@ -276,8 +314,6 @@ def test_run_crop_pipeline_uses_salience_pipeline_dispatch(monkeypatch, fastapi_
     )
 
     assert result == "center-result"
-    assert calls["center"] == 1
-    assert calls["frontal"] == 0
 
 
 def test_run_crop_pipeline_rejects_unsupported_method_for_salience_pipeline(monkeypatch, fastapi_main_module):
@@ -354,3 +390,33 @@ def test_crop_batch_endpoint_sets_binary_transport_headers(monkeypatch, fastapi_
     assert int(response.headers["content-length"]) > 0
 
     asyncio.run(response.background())
+
+
+def test_salience_compute_candidate_crop_box_prefers_largest_component(fastapi_main_module):
+    mask = fastapi_main_module.np.zeros((10, 10), dtype=fastapi_main_module.np.float32)
+    mask[1:4, 1:4] = 0.9
+    mask[5:10, 5:10] = 0.95
+
+    box = fastapi_main_module.compute_candidate_crop_box(
+        mask,
+        image_size=(10, 10),
+        threshold=0.5,
+        padding_ratio=0.0,
+        min_salient_area_ratio=0.01,
+    )
+
+    assert box == (5, 5, 10, 10)
+
+
+def test_salience_compute_candidate_crop_box_uses_center_bias_fallback(fastapi_main_module):
+    mask = fastapi_main_module.np.zeros((10, 10), dtype=fastapi_main_module.np.float32)
+
+    box = fastapi_main_module.compute_candidate_crop_box(
+        mask,
+        image_size=(100, 80),
+        threshold=0.9,
+        min_salient_area_ratio=0.5,
+        use_center_bias_fallback=True,
+    )
+
+    assert box == (16, 9, 84, 77)
