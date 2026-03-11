@@ -21,6 +21,7 @@ function getAuthHeaders() {
 
 function appendCropOptions(form, options = {}) {
   if (options.method) form.append("method", String(options.method));
+  if (options.pipeline) form.append("pipeline", String(options.pipeline));
   if (options.targetAspectRatio) {
     form.append("target_aspect_ratio", String(options.targetAspectRatio));
   }
