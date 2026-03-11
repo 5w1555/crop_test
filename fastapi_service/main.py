@@ -1790,6 +1790,7 @@ async def health():
 @app.post("/crop")
 async def crop_endpoint(
     file: UploadFile = File(...),
+    pipeline: str = Form("auto"),
     method: str = Form("auto"),
     target_aspect_ratio: str | None = Form(default=None),
     margin_top: float | None = Form(default=None),
@@ -1803,6 +1804,7 @@ async def crop_endpoint(
 ):
     """
     Upload an image and return a cropped image.
+    `pipeline` can be: auto (default), face, salience, heuristic
     `method` can be: auto (default), head_bust, frontal, profile, chin, nose, below_lips, center_content
     """
     suffix = os.path.splitext(file.filename)[1] or ".jpg"
@@ -1822,7 +1824,7 @@ async def crop_endpoint(
         tmp.close()
 
         async with crop_request_slot():
-            cropped = run_crop_pipeline(tmp.name, method, crop_options)
+            cropped = run_crop_pipeline(tmp.name, method, crop_options, pipeline=pipeline)
             output_info = resolve_output_format(file.filename, file.content_type)
             buf = image_to_buffer(cropped, output_info['pil_format'])
             headers = {
@@ -1843,7 +1845,9 @@ def run_crop_pipeline(
     temp_path: str,
     method: str,
     crop_options,
+    pipeline: str = "auto",
 ):
+    pipeline = _normalize_pipeline(pipeline)
     box, landmarks, cv_img, pil_img, metadata = get_face_and_landmarks(
         temp_path, conf_threshold=0.3
     )
@@ -1853,37 +1857,48 @@ def run_crop_pipeline(
             raise RuntimeError("Unable to load image for manual crop")
         return apply_crop_postprocessing(pil_img, crop_options)
 
+    normalized_method = method.strip().lower() if isinstance(method, str) else str(method).strip().lower()
     cropped = None
     no_face_detected = box is None or landmarks is None
 
-    if no_face_detected:
-        print("No face detected in request. Using center/content fallback crop.")
-        cropped = center_content_crop(pil_img, metadata=metadata)
-    elif method == "head_bust":
-        cropped = head_bust_crop(temp_path)
-    elif method == "auto":
-        cropped = auto_crop(
-            pil_img,
-            frontal_margin=20,
-            profile_margin=20,
-            box=box,
-            landmarks=landmarks,
-            metadata=metadata,
-        )
-    elif method == "frontal":
-        cropped = crop_frontal_image(pil_img, landmarks=landmarks, metadata=metadata)
-    elif method == "profile":
-        cropped = crop_profile_image(pil_img, box=box, metadata=metadata)
-    elif method == "chin":
-        cropped = crop_chin_image(pil_img, box=box, metadata=metadata)
-    elif method == "nose":
-        cropped = crop_nose_image(pil_img, box=box, landmarks=landmarks, metadata=metadata)
-    elif method == "below_lips":
-        cropped = crop_below_lips_image(pil_img, landmarks=landmarks, metadata=metadata)
-    elif method == "center_content":
+    if pipeline in {"auto", "face"}:
+        if no_face_detected:
+            print("No face detected in request. Using center/content fallback crop.")
+            cropped = center_content_crop(pil_img, metadata=metadata)
+        elif normalized_method == "head_bust":
+            cropped = head_bust_crop(temp_path)
+        elif normalized_method == "auto":
+            cropped = auto_crop(
+                pil_img,
+                frontal_margin=20,
+                profile_margin=20,
+                box=box,
+                landmarks=landmarks,
+                metadata=metadata,
+            )
+        elif normalized_method == "frontal":
+            cropped = crop_frontal_image(pil_img, landmarks=landmarks, metadata=metadata)
+        elif normalized_method == "profile":
+            cropped = crop_profile_image(pil_img, box=box, metadata=metadata)
+        elif normalized_method == "chin":
+            cropped = crop_chin_image(pil_img, box=box, metadata=metadata)
+        elif normalized_method == "nose":
+            cropped = crop_nose_image(pil_img, box=box, landmarks=landmarks, metadata=metadata)
+        elif normalized_method == "below_lips":
+            cropped = crop_below_lips_image(pil_img, landmarks=landmarks, metadata=metadata)
+        elif normalized_method == "center_content":
+            cropped = center_content_crop(pil_img, metadata=metadata)
+        else:
+            raise HTTPException(status_code=400, detail="Unknown method")
+    elif pipeline in {"salience", "heuristic"}:
+        if normalized_method not in {"auto", "center_content"}:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Method '{normalized_method}' is not supported for pipeline '{pipeline}'",
+            )
         cropped = center_content_crop(pil_img, metadata=metadata)
     else:
-        raise HTTPException(status_code=400, detail="Unknown method")
+        raise HTTPException(status_code=400, detail=f"Unknown pipeline '{pipeline}'")
 
     if cropped is None:
         raise RuntimeError("Cropping failed")
@@ -1974,6 +1989,26 @@ def _normalize_anchor_hint(anchor_hint: str | None):
         raise HTTPException(
             status_code=400,
             detail=f"anchor_hint must be one of: {', '.join(sorted(allowed))}",
+        )
+    return value
+
+
+def _normalize_pipeline(pipeline: str | None):
+    if isinstance(pipeline, FormField):
+        pipeline = pipeline.default
+
+    if not pipeline:
+        return "auto"
+
+    value = pipeline.strip().lower()
+    if not value:
+        return "auto"
+
+    allowed = {"auto", "face", "salience", "heuristic"}
+    if value not in allowed:
+        raise HTTPException(
+            status_code=400,
+            detail=f"pipeline must be one of: {', '.join(sorted(allowed))}",
         )
     return value
 
@@ -2266,6 +2301,7 @@ def image_to_buffer(image, output_format: str):
 async def crop_batch_endpoint(
     files: list[UploadFile] | None = File(default=None),
     file: list[UploadFile] | None = File(default=None),
+    pipeline: str = Form("auto"),
     method: str = Form("auto"),
     target_aspect_ratio: str | None = Form(default=None),
     margin_top: float | None = Form(default=None),
@@ -2295,7 +2331,7 @@ async def crop_batch_endpoint(
     zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
     zip_tmp_path = zip_tmp.name
     zip_tmp.close()
-    manifest = {"method": method, "processed": [], "failed": []}
+    manifest = {"pipeline": _normalize_pipeline(pipeline), "method": method, "processed": [], "failed": []}
     crop_options = parse_crop_options(
         target_aspect_ratio=target_aspect_ratio,
         margin_top=margin_top,
@@ -2323,7 +2359,7 @@ async def crop_batch_endpoint(
                         raise ValueError("Uploaded file is empty")
 
                     async with crop_request_slot():
-                        cropped = run_crop_pipeline(tmp.name, method, crop_options)
+                        cropped = run_crop_pipeline(tmp.name, method, crop_options, pipeline=pipeline)
 
                     output_info = resolve_output_format(input_name, uploaded_file.content_type)
                     output_stem = Path(input_name).stem or f"image_{index}"
