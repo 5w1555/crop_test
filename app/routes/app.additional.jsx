@@ -12,6 +12,10 @@ import {
 import { cropImages, health } from "../utils/smartCropClient";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
+import {
+  buildRouteCropRequestContract,
+  normalizePipeline,
+} from "../utils/cropRequestContract.js";
 
 const CROP_METHODS = [
   {
@@ -110,6 +114,32 @@ const METHOD_ASPECT_RATIO_HINTS = {
   below_lips: 1,
   center_content: 1,
 };
+const PIPELINE_OPTIONS = [
+  {
+    value: "auto",
+    label: "Auto",
+    description:
+      "Recommended for most batches. Smart Crop chooses the best pipeline per image.",
+  },
+  {
+    value: "face",
+    label: "Face",
+    description:
+      "Use for portrait-heavy sets where a visible face should drive composition.",
+  },
+  {
+    value: "salience",
+    label: "Salience",
+    description:
+      "Use for products and objects when visual attention (not faces) should lead framing.",
+  },
+  {
+    value: "heuristic",
+    label: "Heuristic",
+    description:
+      "Use for deterministic fallback behavior when you need consistent non-ML crop logic.",
+  },
+];
 const MIN_CROP_SIZE_FRACTION = 0.05;
 const CROP_COORDINATE_EPSILON = 0.001;
 
@@ -723,17 +753,9 @@ export const action = async ({ request }) => {
     }
   }
 
-  const method = String(formData.get("method") || "auto");
-  const optionPayload = buildCropOptionPayload({
-    targetAspectRatio: String(formData.get("target_aspect_ratio") || ""),
-    marginTop: String(formData.get("margin_top") || ""),
-    marginRight: String(formData.get("margin_right") || ""),
-    marginBottom: String(formData.get("margin_bottom") || ""),
-    marginLeft: String(formData.get("margin_left") || ""),
-    anchorHint: String(formData.get("anchor_hint") || ""),
-    filters: String(formData.get("filters") || ""),
-    cropCoordinates: String(formData.get("crop_coordinates") || ""),
-  });
+  const { method, pipeline, optionValues } =
+    buildRouteCropRequestContract(formData);
+  const optionPayload = buildCropOptionPayload(optionValues);
 
   if (optionPayload.errors.length) {
     return jsonError(optionPayload.errors.join(" "));
@@ -754,6 +776,7 @@ export const action = async ({ request }) => {
   try {
     const response = await cropImages(files, {
       method: planReservation.effectiveMethod,
+      pipeline,
       ...optionPayload.options,
     });
     const elapsedMs = Date.now() - startedAt;
@@ -909,6 +932,7 @@ export default function CropImagePage() {
     height: 0,
   });
   const [selectedPreset, setSelectedPreset] = useState("auto");
+  const [selectedPipeline, setSelectedPipeline] = useState("auto");
   const [previewCropRect, setPreviewCropRect] = useState(null);
   const [isCropDirty, setIsCropDirty] = useState(false);
   const [lockPresetAspectRatio, setLockPresetAspectRatio] = useState(true);
@@ -945,6 +969,8 @@ export default function CropImagePage() {
       ) {
         setSelectedPreset(parsedPreferences.selectedPreset);
       }
+
+      setSelectedPipeline(normalizePipeline(parsedPreferences.selectedPipeline));
     } catch (error) {
       console.warn("Failed to hydrate crop preferences from local storage", {
         error: error instanceof Error ? error.message : String(error),
@@ -963,9 +989,10 @@ export default function CropImagePage() {
       PREFERENCE_STORAGE_KEY,
       JSON.stringify({
         selectedPreset,
+        selectedPipeline,
       }),
     );
-  }, [selectedPreset]);
+  }, [selectedPipeline, selectedPreset]);
 
   const showToast = useCallback(
     (message, options) => {
@@ -1064,6 +1091,9 @@ export default function CropImagePage() {
   const selectedMethodDetails =
     CROP_METHODS.find((method) => method.value === selectedMethod) ||
     CROP_METHODS[0];
+  const selectedPipelineDetails =
+    PIPELINE_OPTIONS.find((pipeline) => pipeline.value === selectedPipeline) ||
+    PIPELINE_OPTIONS[0];
   const isPlanBlockedByMethod =
     !planUsage.allowsFaceDetection && selectedMethod !== "auto";
   const blockedMethodUnlockPlan = PLAN_CONFIG.pro.label;
@@ -1845,6 +1875,34 @@ export default function CropImagePage() {
             </s-box>
 
             <input type="hidden" name="method" value={selectedMethod} />
+
+            <s-box
+              padding="base"
+              border="base"
+              borderRadius="base"
+              background="bg-fill-secondary"
+            >
+              <s-stack direction="block" gap="small">
+                <label htmlFor="pipeline">Pipeline</label>
+                <select
+                  id="pipeline"
+                  name="pipeline"
+                  value={selectedPipeline}
+                  onChange={(event) =>
+                    setSelectedPipeline(event.currentTarget.value)
+                  }
+                >
+                  {PIPELINE_OPTIONS.map((pipeline) => (
+                    <option key={pipeline.value} value={pipeline.value}>
+                      {pipeline.label}
+                    </option>
+                  ))}
+                </select>
+                <s-text tone="subdued">
+                  {selectedPipelineDetails.description}
+                </s-text>
+              </s-stack>
+            </s-box>
 
             <details>
               <summary>

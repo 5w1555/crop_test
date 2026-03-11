@@ -151,6 +151,7 @@ test("cropImage appends optional crop contract fields", async () => {
       height: 0.5,
     },
     filters: ["detail", "sharpen"],
+    pipeline: "salience",
   });
 
   assert.equal(requestedOptions.body.get("target_aspect_ratio"), "4:5");
@@ -164,6 +165,7 @@ test("cropImage appends optional crop contract fields", async () => {
     '{"left":0.1,"top":0.2,"width":0.6,"height":0.5}',
   );
   assert.equal(requestedOptions.body.get("filters"), '["detail","sharpen"]');
+  assert.equal(requestedOptions.body.get("pipeline"), "salience");
 });
 
 test("cropImages appends optional crop contract fields", async () => {
@@ -187,6 +189,7 @@ test("cropImages appends optional crop contract fields", async () => {
     cropCoordinates:
       '{"left":0.15,"top":0.1,"width":0.7,"height":0.75,"unit":"fraction"}',
     filters: "detail,sharpen",
+    pipeline: "face",
   });
 
   assert.equal(requestedOptions.body.get("method"), "profile");
@@ -201,6 +204,7 @@ test("cropImages appends optional crop contract fields", async () => {
     '{"left":0.15,"top":0.1,"width":0.7,"height":0.75,"unit":"fraction"}',
   );
   assert.equal(requestedOptions.body.get("filters"), "detail,sharpen");
+  assert.equal(requestedOptions.body.get("pipeline"), "face");
 });
 
 test("health returns true for ok responses and false when fetch fails", async () => {
