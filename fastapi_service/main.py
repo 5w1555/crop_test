@@ -20,6 +20,7 @@ from PIL import Image, ImageCms, ImageOps, ImageFilter, ImageEnhance, ImageDraw
 
 import piexif
 from insightface.app import FaceAnalysis
+from salience import compute_candidate_crop_box, infer_salience_mask
 
 # Optional RAW support
 try:
@@ -1896,7 +1897,21 @@ def run_crop_pipeline(
                 status_code=400,
                 detail=f"Method '{normalized_method}' is not supported for pipeline '{pipeline}'",
             )
-        cropped = center_content_crop(pil_img, metadata=metadata)
+        salience_mask = None
+        try:
+            salience_mask = infer_salience_mask(pil_img)
+        except Exception as exc:
+            print(f"Salience inference unavailable, using center/content fallback: {exc}")
+
+        candidate_box = compute_candidate_crop_box(
+            salience_mask,
+            pil_img.size,
+            use_center_bias_fallback=True,
+        )
+        if candidate_box is None:
+            cropped = center_content_crop(pil_img, metadata=metadata)
+        else:
+            cropped = process_color_profile(pil_img.crop(candidate_box), metadata)
     else:
         raise HTTPException(status_code=400, detail=f"Unknown pipeline '{pipeline}'")
 

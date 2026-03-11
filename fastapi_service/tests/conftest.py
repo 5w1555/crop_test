@@ -7,6 +7,10 @@ import pytest
 
 
 def _install_stubs():
+    service_dir = Path(__file__).resolve().parents[1]
+    if str(service_dir) not in sys.path:
+        sys.path.insert(0, str(service_dir))
+
     cv2_stub = types.ModuleType("cv2")
     cv2_stub.IMREAD_UNCHANGED = 1
     cv2_stub.IMREAD_COLOR = 1
