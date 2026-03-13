@@ -142,6 +142,17 @@ const PIPELINE_OPTIONS = [
 ];
 const MIN_CROP_SIZE_FRACTION = 0.05;
 const CROP_COORDINATE_EPSILON = 0.001;
+const CROP_RESIZE_HIT_SIZE_PX = 14;
+const CROP_RESIZE_HANDLES = [
+  "n",
+  "s",
+  "e",
+  "w",
+  "nw",
+  "ne",
+  "sw",
+  "se",
+];
 
 function parseCropSummaryHeader(rawSummary) {
   if (!rawSummary) {
@@ -547,6 +558,80 @@ function isPointInsideCropRect(point, cropRect) {
   );
 }
 
+function getCropResizeHandle(point, cropRect, hitThresholdX, hitThresholdY) {
+  if (!point || !cropRect) {
+    return null;
+  }
+
+  const left = cropRect.left;
+  const right = cropRect.left + cropRect.width;
+  const top = cropRect.top;
+  const bottom = cropRect.top + cropRect.height;
+  const nearLeft = Math.abs(point.x - left) <= hitThresholdX;
+  const nearRight = Math.abs(point.x - right) <= hitThresholdX;
+  const nearTop = Math.abs(point.y - top) <= hitThresholdY;
+  const nearBottom = Math.abs(point.y - bottom) <= hitThresholdY;
+
+  if (nearTop && nearLeft) return "nw";
+  if (nearTop && nearRight) return "ne";
+  if (nearBottom && nearLeft) return "sw";
+  if (nearBottom && nearRight) return "se";
+  if (nearTop && point.x >= left && point.x <= right) return "n";
+  if (nearBottom && point.x >= left && point.x <= right) return "s";
+  if (nearLeft && point.y >= top && point.y <= bottom) return "w";
+  if (nearRight && point.y >= top && point.y <= bottom) return "e";
+
+  return null;
+}
+
+function resizeCropRectFromHandle({ startRect, handle, point, lockedAspectRatio }) {
+  if (!startRect || !handle || !point) {
+    return null;
+  }
+
+  if (["nw", "ne", "sw", "se"].includes(handle) && lockedAspectRatio) {
+    const oppositePoint = {
+      x: handle.includes("w") ? startRect.left + startRect.width : startRect.left,
+      y: handle.includes("n") ? startRect.top + startRect.height : startRect.top,
+    };
+
+    return buildCropRectFromDragPoints({
+      startPoint: oppositePoint,
+      currentPoint: point,
+      lockedAspectRatio,
+    });
+  }
+
+  const minSize = MIN_CROP_SIZE_FRACTION;
+  const startRight = startRect.left + startRect.width;
+  const startBottom = startRect.top + startRect.height;
+  let left = startRect.left;
+  let right = startRight;
+  let top = startRect.top;
+  let bottom = startBottom;
+
+  if (handle.includes("w")) {
+    left = clamp(point.x, 0, startRight - minSize);
+  }
+  if (handle.includes("e")) {
+    right = clamp(point.x, startRect.left + minSize, 1);
+  }
+  if (handle.includes("n")) {
+    top = clamp(point.y, 0, startBottom - minSize);
+  }
+  if (handle.includes("s")) {
+    bottom = clamp(point.y, startRect.top + minSize, 1);
+  }
+
+  const width = right - left;
+  const height = bottom - top;
+  if (width < minSize || height < minSize) {
+    return null;
+  }
+
+  return { left, top, width, height };
+}
+
 function areCropRectsEquivalent(firstRect, secondRect, epsilon = 0.0001) {
   if (!firstRect || !secondRect) {
     return false;
@@ -872,6 +957,7 @@ export default function CropImagePage() {
   const [selectedPreset, setSelectedPreset] = useState("auto");
   const [selectedPipeline, setSelectedPipeline] = useState("auto");
   const [previewCropRect, setPreviewCropRect] = useState(null);
+  const [cropHoverHandle, setCropHoverHandle] = useState(null);
   const [isCropDirty, setIsCropDirty] = useState(false);
   const [lockPresetAspectRatio, setLockPresetAspectRatio] = useState(true);
   const [cropValidationError, setCropValidationError] = useState("");
@@ -979,6 +1065,7 @@ export default function CropImagePage() {
       setPreviewDimensions({ width: 0, height: 0 });
       setPreviewCropRect(null);
       setIsCropDirty(false);
+      setCropHoverHandle(null);
       setCropValidationError("");
       return;
     }
@@ -988,6 +1075,7 @@ export default function CropImagePage() {
     setPreviewDimensions({ width: 0, height: 0 });
     setPreviewCropRect(null);
     setIsCropDirty(false);
+    setCropHoverHandle(null);
     setCropValidationError("");
     setPreviewFile({
       name: firstFile.name,
@@ -1067,9 +1155,14 @@ export default function CropImagePage() {
   }, [hintedTargetAspectRatio, selectedMethod, sourceAspectRatio]);
 
   useEffect(() => {
+    setIsCropDirty(false);
+  }, [selectedPreset]);
+
+  useEffect(() => {
     if (!previewFile || !defaultPreviewCropRect) {
       setPreviewCropRect(null);
       setIsCropDirty(false);
+      setCropHoverHandle(null);
       return;
     }
 
@@ -1103,6 +1196,23 @@ export default function CropImagePage() {
     };
   }, []);
 
+  const getCropResizeHitThreshold = useCallback(() => {
+    const stage = previewStageRef.current;
+    if (!stage) {
+      return null;
+    }
+
+    const bounds = stage.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) {
+      return null;
+    }
+
+    return {
+      x: Math.min(CROP_RESIZE_HIT_SIZE_PX / bounds.width, 0.06),
+      y: Math.min(CROP_RESIZE_HIT_SIZE_PX / bounds.height, 0.06),
+    };
+  }, []);
+
   const handleCropPointerDown = useCallback(
     (event) => {
       if (event.pointerType === "mouse" && event.button !== 0) {
@@ -1114,20 +1224,37 @@ export default function CropImagePage() {
         return;
       }
 
+      const hitThreshold = getCropResizeHitThreshold();
+      const resizeHandle = hitThreshold
+        ? getCropResizeHandle(
+            pointerPoint,
+            previewCropRect,
+            hitThreshold.x,
+            hitThreshold.y,
+          )
+        : null;
+
       const isMoveInteraction = isPointInsideCropRect(
         pointerPoint,
         previewCropRect,
       );
 
-      cropInteractionRef.current = isMoveInteraction
+      cropInteractionRef.current = resizeHandle
         ? {
+            pointerId: event.pointerId,
+            mode: "resize",
+            handle: resizeHandle,
+            startRect: previewCropRect,
+          }
+        : isMoveInteraction
+          ? {
             pointerId: event.pointerId,
             mode: "move",
             startRect: previewCropRect,
             offsetX: pointerPoint.x - previewCropRect.left,
             offsetY: pointerPoint.y - previewCropRect.top,
           }
-        : {
+          : {
             pointerId: event.pointerId,
             mode: "draw",
             startPoint: pointerPoint,
@@ -1135,22 +1262,60 @@ export default function CropImagePage() {
 
       setIsCropPointerActive(true);
       setIsCropDirty(true);
+      setCropHoverHandle(resizeHandle);
       setCropValidationError("");
       event.currentTarget.setPointerCapture?.(event.pointerId);
       event.preventDefault();
     },
-    [getNormalizedPointerPosition, previewCropRect],
+    [getCropResizeHitThreshold, getNormalizedPointerPosition, previewCropRect],
   );
 
   const handleCropPointerMove = useCallback(
     (event) => {
       const interaction = cropInteractionRef.current;
-      if (!interaction || interaction.pointerId !== event.pointerId) {
+      const pointerPoint = getNormalizedPointerPosition(event);
+      if (!pointerPoint) {
         return;
       }
 
-      const pointerPoint = getNormalizedPointerPosition(event);
-      if (!pointerPoint) {
+      if (!interaction) {
+        if (!previewCropRect) {
+          setCropHoverHandle(null);
+          return;
+        }
+
+        const hitThreshold = getCropResizeHitThreshold();
+        if (!hitThreshold) {
+          setCropHoverHandle(null);
+          return;
+        }
+
+        setCropHoverHandle(
+          getCropResizeHandle(
+            pointerPoint,
+            previewCropRect,
+            hitThreshold.x,
+            hitThreshold.y,
+          ),
+        );
+        return;
+      }
+
+      if (interaction.pointerId !== event.pointerId) {
+        return;
+      }
+
+      if (interaction.mode === "resize" && interaction.startRect) {
+        const nextRect = resizeCropRectFromHandle({
+          startRect: interaction.startRect,
+          handle: interaction.handle,
+          point: pointerPoint,
+          lockedAspectRatio: normalizedLockedAspectRatio || null,
+        });
+
+        if (nextRect) {
+          setPreviewCropRect(nextRect);
+        }
         return;
       }
 
@@ -1181,7 +1346,12 @@ export default function CropImagePage() {
         setPreviewCropRect(nextRect);
       }
     },
-    [getNormalizedPointerPosition, normalizedLockedAspectRatio],
+    [
+      getCropResizeHitThreshold,
+      getNormalizedPointerPosition,
+      normalizedLockedAspectRatio,
+      previewCropRect,
+    ],
   );
 
   const finishCropPointerInteraction = useCallback((event) => {
@@ -1192,12 +1362,14 @@ export default function CropImagePage() {
 
     cropInteractionRef.current = null;
     setIsCropPointerActive(false);
+    setCropHoverHandle(null);
     event.currentTarget.releasePointerCapture?.(event.pointerId);
   }, []);
 
   const handleCropPointerCaptureLost = useCallback(() => {
     cropInteractionRef.current = null;
     setIsCropPointerActive(false);
+    setCropHoverHandle(null);
   }, []);
 
   const cropPreviewModel = useMemo(() => {
@@ -1331,8 +1503,26 @@ export default function CropImagePage() {
   const resetPreviewCrop = useCallback(() => {
     setIsCropDirty(false);
     setCropValidationError("");
+    setCropHoverHandle(null);
     setPreviewCropRect(defaultPreviewCropRect);
   }, [defaultPreviewCropRect]);
+
+  const cropCursor = useMemo(() => {
+    if (isCropPointerActive) {
+      if (cropHoverHandle === "n" || cropHoverHandle === "s") return "ns-resize";
+      if (cropHoverHandle === "e" || cropHoverHandle === "w") return "ew-resize";
+      if (cropHoverHandle === "ne" || cropHoverHandle === "sw") return "nesw-resize";
+      if (cropHoverHandle === "nw" || cropHoverHandle === "se") return "nwse-resize";
+      return "grabbing";
+    }
+
+    if (cropHoverHandle === "n" || cropHoverHandle === "s") return "ns-resize";
+    if (cropHoverHandle === "e" || cropHoverHandle === "w") return "ew-resize";
+    if (cropHoverHandle === "ne" || cropHoverHandle === "sw") return "nesw-resize";
+    if (cropHoverHandle === "nw" || cropHoverHandle === "se") return "nwse-resize";
+    if (cropPreviewModel) return "grab";
+    return "crosshair";
+  }, [cropHoverHandle, cropPreviewModel, isCropPointerActive]);
 
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
@@ -1550,6 +1740,17 @@ export default function CropImagePage() {
           border-radius: 10px;
           box-shadow: 0 0 0 9999px rgba(15, 23, 42, 0.35);
           pointer-events: none;
+        }
+
+        .crop-preview-handle {
+          position: absolute;
+          width: 12px;
+          height: 12px;
+          border-radius: 999px;
+          border: 2px solid #fff;
+          background: #008060;
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+          transform: translate(-50%, -50%);
         }
 
         .crop-preview-cropped {
@@ -1927,12 +2128,13 @@ export default function CropImagePage() {
                 onPointerCancel={finishCropPointerInteraction}
                 onLostPointerCapture={handleCropPointerCaptureLost}
                 style={{
-                  cursor: isCropPointerActive
-                    ? "grabbing"
-                    : cropPreviewModel
-                      ? "grab"
-                      : "crosshair",
+                  cursor: cropCursor,
                   touchAction: "none",
+                }}
+                onPointerLeave={() => {
+                  if (!cropInteractionRef.current) {
+                    setCropHoverHandle(null);
+                  }
                 }}
               >
                 <img
@@ -1959,7 +2161,30 @@ export default function CropImagePage() {
                   <div
                     className="crop-preview-overlay"
                     style={cropOverlayStyle}
-                  />
+                  >
+                    {CROP_RESIZE_HANDLES.map((handle) => (
+                      <div
+                        key={handle}
+                        className="crop-preview-handle"
+                        style={{
+                          left: handle.includes("w")
+                            ? "0%"
+                            : handle.includes("e")
+                              ? "100%"
+                              : "50%",
+                          top: handle.includes("n")
+                            ? "0%"
+                            : handle.includes("s")
+                              ? "100%"
+                              : "50%",
+                          opacity:
+                            cropHoverHandle === handle || isCropPointerActive
+                              ? 1
+                              : 0.75,
+                        }}
+                      />
+                    ))}
+                  </div>
                 )}
               </div>
               {cropPreviewModel && croppedOutputImageStyle && (
