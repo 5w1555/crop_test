@@ -862,6 +862,7 @@ export default function CropImagePage() {
   const cropInteractionRef = useRef(null);
   const preferencesHydratedRef = useRef(false);
   const [fileError, setFileError] = useState("");
+  const [selectedUploadFiles, setSelectedUploadFiles] = useState([]);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
   const [previewDimensions, setPreviewDimensions] = useState({
@@ -1004,14 +1005,19 @@ export default function CropImagePage() {
 
     setFileError(nextError || "");
     syncPreviewFile(nextError ? [] : nextFiles);
+    if (nextError) {
+      setSelectedUploadFiles([]);
+      setSelectedFiles([]);
+      return;
+    }
+
+    setSelectedUploadFiles(nextFiles);
     setSelectedFiles(
-      nextError
-        ? []
-        : nextFiles.map((file) => ({
-            name: file.name,
-            mimeType: file.type,
-            sizeBytes: file.size,
-          })),
+      nextFiles.map((file) => ({
+        name: file.name,
+        mimeType: file.type,
+        sizeBytes: file.size,
+      })),
     );
   };
 
@@ -1339,9 +1345,7 @@ export default function CropImagePage() {
 
     const requestUrl =
       form.action ||
-      (typeof window !== "undefined"
-        ? window.location.pathname + window.location.search
-        : "/app/additional");
+      (typeof window !== "undefined" ? window.location.pathname : "/app/additional");
 
     if (!hasValidSelection) {
       if (fileError) {
@@ -1380,7 +1384,12 @@ export default function CropImagePage() {
         throw new Error("Shopify session token is unavailable in this context.");
       }
 
-      const formData = new FormData(form);
+      const formData = new FormData();
+      selectedUploadFiles.forEach((file) => {
+        formData.append("file", file, file.name || "upload");
+      });
+      formData.set("method", selectedMethod);
+      formData.set("pipeline", selectedPipeline);
       formData.set("target_aspect_ratio", cropOptionFields.targetAspectRatio);
       formData.set("margin_top", cropOptionFields.marginTop);
       formData.set("margin_right", cropOptionFields.marginRight);
@@ -1646,9 +1655,13 @@ export default function CropImagePage() {
                 if (!nextFiles.length) return;
 
                 if (inputRef.current) {
-                  const dataTransfer = new DataTransfer();
-                  nextFiles.forEach((file) => dataTransfer.items.add(file));
-                  inputRef.current.files = dataTransfer.files;
+                  try {
+                    const dataTransfer = new DataTransfer();
+                    nextFiles.forEach((file) => dataTransfer.items.add(file));
+                    inputRef.current.files = dataTransfer.files;
+                  } catch {
+                    // Some embedded browser contexts disallow setting input.files.
+                  }
                 }
 
                 syncSelectedFiles(nextFiles);
@@ -1972,6 +1985,7 @@ export default function CropImagePage() {
             variant="secondary"
             onClick={() => {
               setSelectedFiles([]);
+              setSelectedUploadFiles([]);
               syncPreviewFile([]);
               setFileError("");
               setSelectedPreset("auto");
