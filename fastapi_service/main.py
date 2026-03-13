@@ -1581,7 +1581,6 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depe
 from fastapi.params import Form as FormField
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-from starlette.background import BackgroundTask
 import tempfile
 
 app = FastAPI(title="smart-crop API")
@@ -1677,6 +1676,7 @@ CROP_CONCURRENCY = _parse_env_int("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv(
 SLOT_ACQUIRE_TIMEOUT_SECONDS = _parse_env_float("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20", min_value=0.5, max_value=300)
 PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true", "yes", "on"}
 SMARTCROP_API_TOKEN = os.getenv("SMARTCROP_API_TOKEN")
+R2_PRESIGNED_EXPIRY_SECONDS = 600
 
 _crop_request_semaphore = asyncio.Semaphore(CROP_CONCURRENCY)
 
@@ -1919,6 +1919,65 @@ def run_crop_pipeline(
         raise RuntimeError("Cropping failed")
 
     return apply_crop_postprocessing(cropped, crop_options)
+
+
+def _get_r2_client_config():
+    required_env = {
+        "R2_ACCOUNT_ID": os.getenv("R2_ACCOUNT_ID"),
+        "R2_ACCESS_KEY_ID": os.getenv("R2_ACCESS_KEY_ID"),
+        "R2_SECRET_ACCESS_KEY": os.getenv("R2_SECRET_ACCESS_KEY"),
+        "R2_BUCKET": os.getenv("R2_BUCKET"),
+    }
+    missing = [name for name, value in required_env.items() if not value]
+    if missing:
+        raise RuntimeError(
+            "Missing required R2 environment variables: "
+            + ", ".join(sorted(missing))
+        )
+
+    return {
+        "account_id": required_env["R2_ACCOUNT_ID"],
+        "access_key_id": required_env["R2_ACCESS_KEY_ID"],
+        "secret_access_key": required_env["R2_SECRET_ACCESS_KEY"],
+        "bucket": required_env["R2_BUCKET"],
+    }
+
+
+def _upload_batch_zip_to_r2(zip_bytes: bytes, filename: str, expires_in: int):
+    import boto3
+
+    config = _get_r2_client_config()
+    endpoint_url = f"https://{config['account_id']}.r2.cloudflarestorage.com"
+    object_key = f"smartcrop/batch/{secrets.token_urlsafe(16)}-{filename}"
+
+    s3_client = boto3.client(
+        "s3",
+        endpoint_url=endpoint_url,
+        aws_access_key_id=config["access_key_id"],
+        aws_secret_access_key=config["secret_access_key"],
+        region_name="auto",
+    )
+
+    content_disposition = f'attachment; filename="{filename}"'
+    s3_client.put_object(
+        Bucket=config["bucket"],
+        Key=object_key,
+        Body=zip_bytes,
+        ContentType="application/zip",
+        ContentDisposition=content_disposition,
+    )
+
+    presigned_url = s3_client.generate_presigned_url(
+        "get_object",
+        Params={
+            "Bucket": config["bucket"],
+            "Key": object_key,
+            "ResponseContentType": "application/zip",
+            "ResponseContentDisposition": content_disposition,
+        },
+        ExpiresIn=expires_in,
+    )
+    return presigned_url
 
 
 @dataclass
@@ -2343,9 +2402,7 @@ async def crop_batch_endpoint(
             detail=f"Too many files. Max {MAX_BATCH_FILES} files per batch request.",
         )
 
-    zip_tmp = tempfile.NamedTemporaryFile(delete=False, suffix=".zip")
-    zip_tmp_path = zip_tmp.name
-    zip_tmp.close()
+    zip_buffer = io.BytesIO()
     manifest = {"pipeline": _normalize_pipeline(pipeline), "method": method, "processed": [], "failed": []}
     crop_options = parse_crop_options(
         target_aspect_ratio=target_aspect_ratio,
@@ -2360,7 +2417,7 @@ async def crop_batch_endpoint(
     used_output_names = {}
 
     try:
-        with zipfile.ZipFile(zip_tmp_path, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+        with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
             for index, uploaded_file in enumerate(uploaded_files, start=1):
                 suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
                 tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
@@ -2418,10 +2475,6 @@ async def crop_batch_endpoint(
 
             zip_file.writestr("manifest.json", json.dumps(manifest, indent=2))
     except Exception:
-        try:
-            os.unlink(zip_tmp_path)
-        except Exception:
-            pass
         raise
 
     if not manifest["processed"]:
@@ -2433,29 +2486,25 @@ async def crop_batch_endpoint(
             },
         )
 
-    zip_stream = open(zip_tmp_path, "rb")
+    zip_bytes = zip_buffer.getvalue()
 
-    def cleanup_zip_file(stream, path):
-        try:
-            stream.close()
-        finally:
-            try:
-                os.unlink(path)
-            except Exception:
-                pass
+    try:
+        presigned_url = await asyncio.to_thread(
+            _upload_batch_zip_to_r2,
+            zip_bytes,
+            "cropped_batch.zip",
+            R2_PRESIGNED_EXPIRY_SECONDS,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Unable to upload ZIP to R2: {exc}") from exc
 
-    headers = {
-        "Content-Disposition": 'attachment; filename="cropped_batch.zip"',
-        "Cache-Control": "no-store, no-transform",
-        "X-Content-Type-Options": "nosniff",
-        "Content-Length": str(os.path.getsize(zip_tmp_path)),
+    return {
+        "downloadUrl": presigned_url,
+        "filename": "cropped_batch.zip",
+        "expiresIn": R2_PRESIGNED_EXPIRY_SECONDS,
     }
-    return StreamingResponse(
-        zip_stream,
-        media_type="application/zip",
-        headers=headers,
-        background=BackgroundTask(cleanup_zip_file, zip_stream, zip_tmp_path),
-    )
 
 
 if __name__ == "__main__":
