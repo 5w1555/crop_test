@@ -1533,9 +1533,22 @@ export default function CropImagePage() {
       return;
     }
 
-    const requestUrl =
-      form.action ||
-      (typeof window !== "undefined" ? window.location.pathname : "/app/additional");
+    const requestUrl = (() => {
+      if (typeof window === "undefined") {
+        return form.action || "/app/additional";
+      }
+
+      const url = new URL(
+        form.action || window.location.href,
+        window.location.origin,
+      );
+
+      if (!url.search) {
+        url.search = window.location.search;
+      }
+
+      return `${url.pathname}${url.search}`;
+    })();
 
     if (!hasValidSelection) {
       if (fileError) {
@@ -1615,6 +1628,12 @@ export default function CropImagePage() {
 
       if (!response.ok) {
         throw new Error(`Crop request failed (${response.status}).`);
+      }
+
+      if (contentType.includes("text/html")) {
+        throw new Error(
+          "Session expired before the crop completed. Refresh the app and try again.",
+        );
       }
 
       if (!contentType.includes("application/zip")) {
