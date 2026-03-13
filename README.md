@@ -165,6 +165,8 @@ This guarantees migrations are applied before serving traffic.
 > `SMARTCROP_API_URL` is required for Smart Crop and must point to your deployed FastAPI endpoint (prefer Render internal URL when both services are in the same Render workspace; otherwise use the external URL such as `https://smart-crop-api-f97p.onrender.com`).
 >
 > `SMARTCROP_API_TOKEN` must match across both services. FastAPI rejects missing tokens with `401` and invalid tokens with `403` on `/crop` and `/crop/batch`.
+>
+> For batch ZIP downloads via Cloudflare R2, set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` on the FastAPI service, and add an R2 lifecycle rule for prefix `smartcrop/batch/` with 1-day expiration.
 
 ### Smart Crop shared-secret rotation and rollback
 
