@@ -113,8 +113,24 @@ When updating any pinned package (especially `insightface`, `onnxruntime`, `open
   - `method`: one of `auto` (default), `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`
 - Behavior:
   - Reuses the same crop pipeline as `/crop` for each image (face detect + selected method + fallback crop when no face is detected).
-  - Skips invalid/failed files and records failures in `manifest.json` inside the ZIP payload.
+  - Skips invalid/failed files and records failures in `manifest.json` inside the generated ZIP.
   - If every file fails, returns HTTP 400 with failure details.
-- Response:
-  - ZIP stream (`application/zip`) with files named `<original-stem>_cropped.<original-ext>` (deduplicated with numeric suffixes when needed), preserving each file's original image format.
-  - `Content-Disposition: attachment; filename="cropped_batch.zip"`.
+  - Uploads the ZIP bytes to Cloudflare R2 and returns a pre-signed URL.
+- Response (`application/json`):
+  - `downloadUrl`: pre-signed GET URL for direct browser download from R2.
+  - `filename`: suggested download filename (`cropped_batch.zip`).
+  - `expiresIn`: URL TTL in seconds (currently `600`).
+
+### R2 configuration for batch ZIP downloads
+
+Set these environment variables on the FastAPI service:
+
+- `R2_ACCOUNT_ID`
+- `R2_ACCESS_KEY_ID`
+- `R2_SECRET_ACCESS_KEY`
+- `R2_BUCKET`
+
+The service targets the S3-compatible endpoint:
+`https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
+
+Also configure an R2 lifecycle rule for the `smartcrop/batch/` prefix to expire objects after 1 day.
