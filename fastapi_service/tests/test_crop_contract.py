@@ -347,7 +347,7 @@ def test_run_crop_pipeline_raises_runtime_error_when_crop_method_returns_none(mo
         fastapi_main_module.run_crop_pipeline("tmp.jpg", "profile", fastapi_main_module.CropOptions())
 
 
-def test_crop_batch_endpoint_sets_binary_transport_headers(monkeypatch, fastapi_main_module):
+def test_crop_batch_endpoint_returns_presigned_download_payload(monkeypatch, fastapi_main_module):
     import asyncio
     import io
 
@@ -360,6 +360,11 @@ def test_crop_batch_endpoint_sets_binary_transport_headers(monkeypatch, fastapi_
         lambda *args, **kwargs: {"extension": "png", "pil_format": "PNG"},
     )
     monkeypatch.setattr(fastapi_main_module, "image_to_buffer", lambda *args, **kwargs: io.BytesIO(b"png-bytes"))
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "_upload_batch_zip_to_r2",
+        lambda zip_bytes, filename, expires_in: "https://example.r2/presigned.zip",
+    )
 
     upload = UploadFile(
         file=io.BytesIO(b"fake-image-bytes"),
@@ -383,13 +388,11 @@ def test_crop_batch_endpoint_sets_binary_transport_headers(monkeypatch, fastapi_
         )
     )
 
-    assert response.media_type == "application/zip"
-    assert response.headers["content-disposition"] == 'attachment; filename="cropped_batch.zip"'
-    assert response.headers["cache-control"] == "no-store, no-transform"
-    assert response.headers["x-content-type-options"] == "nosniff"
-    assert int(response.headers["content-length"]) > 0
-
-    asyncio.run(response.background())
+    assert response == {
+        "downloadUrl": "https://example.r2/presigned.zip",
+        "filename": "cropped_batch.zip",
+        "expiresIn": 600,
+    }
 
 
 def test_salience_compute_candidate_crop_box_prefers_largest_component(fastapi_main_module):

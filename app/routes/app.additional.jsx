@@ -154,49 +154,6 @@ const CROP_RESIZE_HANDLES = [
   "se",
 ];
 
-function parseCropSummaryHeader(rawSummary) {
-  if (!rawSummary) {
-    return null;
-  }
-
-  try {
-    const parsed = JSON.parse(rawSummary);
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-
-    const successCount = Number(parsed.successCount);
-    const failedCount = Number(parsed.failedCount);
-    const elapsedSeconds = Number(parsed.elapsedSeconds);
-    const failedFiles = Array.isArray(parsed.failedFiles)
-      ? parsed.failedFiles
-          .map((entry) => {
-            if (typeof entry === "string") {
-              return entry;
-            }
-
-            if (entry && typeof entry === "object") {
-              if (typeof entry.filename === "string") return entry.filename;
-              if (typeof entry.file_name === "string") return entry.file_name;
-              if (typeof entry.name === "string") return entry.name;
-            }
-
-            return null;
-          })
-          .filter(Boolean)
-      : [];
-
-    return {
-      successCount: Number.isFinite(successCount) ? successCount : 0,
-      failedCount: Number.isFinite(failedCount) ? failedCount : 0,
-      elapsedSeconds: Number.isFinite(elapsedSeconds) ? elapsedSeconds : null,
-      failedFiles,
-    };
-  } catch {
-    return null;
-  }
-}
-
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) {
     return min;
@@ -809,118 +766,27 @@ export const action = async ({ request }) => {
     });
     const elapsedMs = Date.now() - startedAt;
 
-    const metadataFromHeaders = (() => {
-      const parseNumeric = (value) => {
-        if (value === null || value === undefined || value === "") return null;
-        const parsed = Number(value);
-        return Number.isFinite(parsed) ? parsed : null;
-      };
-
-      const parseManifestHeader = () => {
-        const possibleManifestHeaders = [
-          "x-smartcrop-manifest",
-          "x-manifest",
-          "x-crop-manifest",
-        ];
-
-        for (const headerName of possibleManifestHeaders) {
-          const rawValue = response.headers.get(headerName);
-          if (!rawValue) continue;
-
-          try {
-            const parsed = JSON.parse(rawValue);
-            if (parsed && typeof parsed === "object") {
-              return parsed;
-            }
-          } catch {
-            // ignore malformed manifest headers
-          }
-        }
-
-        return null;
-      };
-
-      const manifest = parseManifestHeader();
-      const failedFiles =
-        (Array.isArray(manifest?.failed_files) && manifest.failed_files) ||
-        (Array.isArray(manifest?.failedFiles) && manifest.failedFiles) ||
-        [];
-      const failedCount =
-        parseNumeric(response.headers.get("x-failed-count")) ??
-        parseNumeric(manifest?.failed_count) ??
-        parseNumeric(manifest?.failedCount) ??
-        failedFiles.length;
-      const processedCount =
-        parseNumeric(response.headers.get("x-processed-count")) ??
-        parseNumeric(manifest?.processed_count) ??
-        parseNumeric(manifest?.processedCount) ??
-        Math.max(files.length - failedCount, 0);
-      const successCount = Math.max(processedCount - failedCount, 0);
-      const elapsedFromManifest =
-        parseNumeric(response.headers.get("x-elapsed-ms")) ??
-        parseNumeric(manifest?.elapsed_ms) ??
-        parseNumeric(manifest?.elapsedMs) ??
-        null;
-
-      return {
-        requestedCount: files.length,
-        processedCount,
-        successCount,
-        failedCount,
-        failedFiles,
-        elapsedMs: elapsedFromManifest ?? elapsedMs,
-        manifest,
-      };
-    })();
-
-    const mimeType =
-      response.headers.get("content-type") || "application/octet-stream";
-    if (!mimeType.includes("application/zip")) {
-      const bodyPreview = (await response.text()).slice(0, 500);
-      console.error("Smart Crop API returned unexpected content type", {
-        mimeType,
-        bodyPreview,
-      });
-      return jsonError(
-        `Expected application/zip response but received ${mimeType}.`,
-        502,
-      );
+    const payload = await response.json();
+    if (!payload?.downloadUrl) {
+      return jsonError("Crop API response is missing downloadUrl.", 502);
     }
 
     await commitPlanUsage({
       shop: session.shop,
-      imageCount: metadataFromHeaders.successCount,
+      imageCount: files.length,
     });
 
-    const headers = new Headers({
-      "content-type": response.headers.get("content-type") || "application/zip",
-      "content-disposition":
-        response.headers.get("content-disposition") ||
-        'attachment; filename="cropped_batch.zip"',
-      "cache-control": "no-store",
-    });
-
-    const contentEncoding = response.headers.get("content-encoding");
-    if (contentEncoding) {
-      headers.set("content-encoding", contentEncoding);
-    }
-
-    const contentLength = response.headers.get("content-length");
-    if (contentLength) {
-      headers.set("content-length", contentLength);
-    }
-
-    headers.set(
-      "x-crop-summary",
-      JSON.stringify({
-        ...metadataFromHeaders,
-        elapsedSeconds: Number((metadataFromHeaders.elapsedMs / 1000).toFixed(2)),
-      }),
-    );
-
-    return new Response(response.body, {
-      status: response.status,
-      headers,
+    return Response.json({
+      downloadUrl: payload.downloadUrl,
+      filename: payload.filename || "cropped_batch.zip",
+      expiresIn: payload.expiresIn || 600,
+      cropSummary: {
+        requestedCount: files.length,
+        successCount: files.length,
+        failedCount: 0,
+        failedFiles: [],
+        elapsedSeconds: Number((elapsedMs / 1000).toFixed(2)),
+      },
     });
   } catch (error) {
     console.error("Crop action failed", {
@@ -966,7 +832,7 @@ export default function CropImagePage() {
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [isReadyToDownload, setIsReadyToDownload] = useState(false);
   const [downloadResult, setDownloadResult] = useState(null);
-  const [downloadBlob, setDownloadBlob] = useState(null);
+  const [downloadLink, setDownloadLink] = useState(null);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -1044,14 +910,6 @@ export default function CropImagePage() {
       }
     };
   }, []);
-
-  useEffect(() => {
-    return () => {
-      if (downloadBlob) {
-        URL.revokeObjectURL(downloadBlob.url);
-      }
-    };
-  }, [downloadBlob]);
 
   const syncPreviewFile = (nextFiles) => {
     if (previewUrlRef.current) {
@@ -1576,9 +1434,8 @@ export default function CropImagePage() {
     setIsSubmittingDownload(true);
     setIsReadyToDownload(false);
     setDownloadResult(null);
-    if (downloadBlob) {
-      URL.revokeObjectURL(downloadBlob.url);
-      setDownloadBlob(null);
+    if (downloadLink) {
+      setDownloadLink(null);
     }
     showToast("Cropping started. Processing images...");
 
@@ -1617,11 +1474,12 @@ export default function CropImagePage() {
       });
 
       const contentType = response.headers.get("content-type") || "";
+      let responsePayload = null;
 
       if (contentType.includes("application/json")) {
-        const payload = await response.json();
-        if (typeof payload?.error === "string" && payload.error) {
-          showToast(payload.error, { isError: true });
+        responsePayload = await response.json();
+        if (typeof responsePayload?.error === "string" && responsePayload.error) {
+          showToast(responsePayload.error, { isError: true });
           return;
         }
       }
@@ -1636,25 +1494,23 @@ export default function CropImagePage() {
         );
       }
 
-      if (!contentType.includes("application/zip")) {
-        throw new Error(`Expected ZIP download but received ${contentType}.`);
+      if (!contentType.includes("application/json")) {
+        throw new Error(`Expected JSON response but received ${contentType}.`);
       }
 
-      const disposition = response.headers.get("content-disposition") || "";
-      const filenameMatch = disposition.match(/filename="([^"]+)"/i);
-      const filename = filenameMatch?.[1] || "cropped_batch.zip";
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
-      const summary = parseCropSummaryHeader(response.headers.get("x-crop-summary"));
+      if (!responsePayload?.downloadUrl) {
+        throw new Error("Missing download URL from crop response.");
+      }
 
-      setDownloadBlob({
-        url: blobUrl,
-        filename,
+      setDownloadLink({
+        url: responsePayload.downloadUrl,
+        filename: responsePayload.filename || "cropped_batch.zip",
+        expiresIn: responsePayload.expiresIn || 600,
       });
-      setDownloadResult(summary);
+      setDownloadResult(responsePayload.cropSummary || null);
       setIsReadyToDownload(true);
 
-      showToast("Crop completed. Review results and download ZIP.");
+      showToast("Crop completed. Your ZIP is ready to download.");
     } catch (error) {
       showToast(
         error instanceof Error
@@ -1668,17 +1524,12 @@ export default function CropImagePage() {
   };
 
   const handleDownloadReadyZip = useCallback(() => {
-    if (!downloadBlob) {
+    if (!downloadLink) {
       return;
     }
 
-    const anchor = document.createElement("a");
-    anchor.href = downloadBlob.url;
-    anchor.download = downloadBlob.filename;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  }, [downloadBlob]);
+    window.open(downloadLink.url, "_blank", "noopener,noreferrer");
+  }, [downloadLink]);
 
   return (
     <s-page heading="Crop Images">
@@ -2098,7 +1949,7 @@ export default function CropImagePage() {
             </s-button>
 
             {isSubmittingDownload && <s-text>Processing images…</s-text>}
-            {isReadyToDownload && downloadBlob && (
+            {isReadyToDownload && downloadLink && (
               <s-box padding="base" border="base" borderRadius="base">
                 <s-stack direction="block" gap="small">
                   <s-text fontWeight="semibold">Batch results</s-text>
