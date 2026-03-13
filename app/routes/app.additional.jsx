@@ -9,7 +9,7 @@ import {
   getShopPlanUsage,
   reservePlanCapacity,
 } from "../utils/plan.server.js";
-import { cropImages, health } from "../utils/smartCropClient";
+import { cropImages } from "../utils/smartCropClient";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
 import {
@@ -661,62 +661,8 @@ function jsonError(error, status = 400, extra = {}) {
 }
 
 export const loader = async ({ request }) => {
-  const { session, admin, billing } = await authenticate.admin(request);
-  const apiHealthy = await health();
+  const { session, billing } = await authenticate.admin(request);
   const billingState = await getBillingState({ billing });
-
-  let products = [];
-  let productContextWarning = null;
-
-  try {
-    const productsResponse = await admin.graphql(
-      `#graphql
-      query CropReadyProducts {
-        products(first: 5, sortKey: UPDATED_AT, reverse: true) {
-          nodes {
-            id
-            title
-            handle
-            totalInventory
-            featuredMedia {
-              preview {
-                image {
-                  url
-                  altText
-                }
-              }
-            }
-          }
-        }
-      }`,
-    );
-
-    const productsJson = await productsResponse.json();
-
-    if (Array.isArray(productsJson?.errors) && productsJson.errors.length > 0) {
-      console.error(
-        "Failed to load product context from Shopify Admin GraphQL",
-        {
-          shop: session.shop,
-          requestId: productsResponse.headers.get("x-request-id") || null,
-          graphqlErrors: productsJson.errors,
-        },
-      );
-
-      productContextWarning = "Product context is temporarily unavailable.";
-    } else {
-      products = productsJson.data?.products?.nodes || [];
-    }
-  } catch (error) {
-    console.error("Failed to load product context from Shopify Admin GraphQL", {
-      shop: session.shop,
-      requestId: null,
-      graphqlErrors: null,
-      error: error instanceof Error ? error.message : String(error),
-    });
-
-    productContextWarning = "Product context is temporarily unavailable.";
-  }
 
   const planUsage = buildPlanView(
     await getShopPlanUsage(session.shop, {
@@ -725,11 +671,8 @@ export const loader = async ({ request }) => {
   );
 
   return {
-    apiHealthy,
     planUsage,
     hasActiveProPlan: billingState.hasActivePayment,
-    products,
-    productContextWarning,
   };
 };
 
@@ -910,13 +853,7 @@ export const action = async ({ request }) => {
 };
 
 export default function CropImagePage() {
-  const {
-    apiHealthy,
-    planUsage,
-    hasActiveProPlan,
-    products,
-    productContextWarning,
-  } = useLoaderData();
+  const { planUsage, hasActiveProPlan } = useLoaderData();
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
@@ -1012,11 +949,6 @@ export default function CropImagePage() {
     },
     [shopify],
   );
-
-  const apiStatusText = useMemo(() => {
-    if (apiHealthy) return "Connected";
-    return "FastAPI service is unreachable";
-  }, [apiHealthy]);
 
   useEffect(() => {
     return () => {
@@ -1167,7 +1099,7 @@ export default function CropImagePage() {
 
   const handleCropPointerDown = useCallback(
     (event) => {
-      if (event.button !== 0) {
+      if (event.pointerType === "mouse" && event.button !== 0) {
         return;
       }
 
@@ -1509,7 +1441,7 @@ export default function CropImagePage() {
       showToast(
         error instanceof Error
           ? error.message
-          : "Unable to crop image. Check the FastAPI service.",
+          : "Unable to crop image.",
         { isError: true },
       );
     } finally {
@@ -1529,10 +1461,6 @@ export default function CropImagePage() {
     anchor.click();
     anchor.remove();
   }, [downloadBlob]);
-
-  const getInventoryStatus = useCallback((inventoryCount) => {
-    return Number(inventoryCount) > 0 ? "In stock" : "Out of stock";
-  }, []);
 
   return (
     <s-page heading="Crop Images">
@@ -1656,14 +1584,6 @@ export default function CropImagePage() {
           }
         }
       `}</style>
-      <s-section heading="FastAPI connection">
-        <s-banner tone={apiHealthy ? "success" : "critical"}>
-          {apiHealthy
-            ? "Connected to Smart Crop API"
-            : "FastAPI service is unreachable. Set SMARTCROP_API_URL and verify /health."}
-        </s-banner>
-      </s-section>
-
       <s-section heading="Plan and usage">
         <s-stack direction="block" gap="small">
           <s-text>
@@ -1690,92 +1610,6 @@ export default function CropImagePage() {
             </s-text>
           )}
         </s-stack>
-      </s-section>
-
-      <s-section heading="Shopify product context">
-        <s-paragraph>
-          Latest products from your catalog are shown below so you can quickly
-          verify which assets should be exported and cropped.
-        </s-paragraph>
-        {productContextWarning && (
-          <s-banner tone="warning">{productContextWarning}</s-banner>
-        )}
-        {!products.length && (
-          <s-text tone="subdued">No products found yet.</s-text>
-        )}
-        {products.length > 0 && (
-          <>
-            <table className="responsive-table">
-              <thead>
-                <tr>
-                  <th align="left">Title</th>
-                  <th align="left">Status</th>
-                  <th align="left">Handle</th>
-                  <th align="right">Inventory</th>
-                  <th align="left">Featured image</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((product) => (
-                  <tr key={product.id}>
-                    <td>{product.title}</td>
-                    <td>{getInventoryStatus(product.totalInventory)}</td>
-                    <td>{product.handle}</td>
-                    <td align="right">{product.totalInventory ?? 0}</td>
-                    <td>
-                      {product.featuredMedia?.preview?.image ? (
-                        <a
-                          href={product.featuredMedia.preview.image.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View image
-                        </a>
-                      ) : (
-                        <span>—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="responsive-card-list">
-              {products.map((product) => (
-                <div key={`${product.id}-card`} className="responsive-card">
-                  <div className="responsive-card-primary">
-                    <span className="responsive-card-name">
-                      {product.title}
-                    </span>
-                    <span>
-                      {(product.totalInventory ?? 0).toString()} in stock
-                    </span>
-                    <span>{getInventoryStatus(product.totalInventory)}</span>
-                  </div>
-                  <div className="responsive-card-metadata">
-                    <div className="responsive-card-row">
-                      <span>Handle</span>
-                      <span>{product.handle}</span>
-                    </div>
-                    <div className="responsive-card-row">
-                      <span>Featured image</span>
-                      {product.featuredMedia?.preview?.image ? (
-                        <a
-                          href={product.featuredMedia.preview.image.url}
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          View image
-                        </a>
-                      ) : (
-                        <span>—</span>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
-        )}
       </s-section>
 
       <s-section heading="Layer 1 — Zero friction">
@@ -2021,7 +1855,6 @@ export default function CropImagePage() {
             <s-button
               type="submit"
               disabled={
-                !apiHealthy ||
                 !hasValidSelection ||
                 isSubmittingDownload ||
                 isPlanBlockedByMethod
@@ -2058,59 +1891,14 @@ export default function CropImagePage() {
         </form>
       </s-section>
 
-      <s-section heading="Selected images">
+      <s-section heading="Preview">
         {!selectedFiles.length && (
-          <s-paragraph>Select one or more images to continue.</s-paragraph>
-        )}
-        {selectedFiles.length > 0 && (
-          <>
-            <table className="responsive-table">
-              <thead>
-                <tr>
-                  <th align="left">Name</th>
-                  <th align="left">Status</th>
-                  <th align="left">MIME type</th>
-                  <th align="right">Size (KB)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {selectedFiles.map((file) => (
-                  <tr key={`${file.name}-${file.sizeBytes}`}>
-                    <td>{file.name}</td>
-                    <td>Ready</td>
-                    <td>{file.mimeType}</td>
-                    <td align="right">{(file.sizeBytes / 1024).toFixed(1)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="responsive-card-list">
-              {selectedFiles.map((file) => (
-                <div
-                  key={`${file.name}-${file.sizeBytes}-card`}
-                  className="responsive-card"
-                >
-                  <div className="responsive-card-primary">
-                    <span className="responsive-card-name">{file.name}</span>
-                    <span>{(file.sizeBytes / 1024).toFixed(1)} KB</span>
-                    <span>Ready</span>
-                  </div>
-                  <div className="responsive-card-metadata">
-                    <div className="responsive-card-row">
-                      <span>MIME type</span>
-                      <span>{file.mimeType}</span>
-                    </div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </>
+          <s-paragraph>Select one or more images to show a preview.</s-paragraph>
         )}
 
         {previewFile && (
           <s-stack direction="block" gap="small">
             <s-text fontWeight="semibold">Preview (first image only)</s-text>
-            <s-text tone="subdued">{previewFile.name}</s-text>
             {cropPreviewModel && (
               <s-text tone="subdued">
                 Estimated output ratio: {cropPreviewRatioLabel}
@@ -2136,7 +1924,7 @@ export default function CropImagePage() {
               >
                 <img
                   src={previewFile.src}
-                  alt={`Preview for ${previewFile.name}`}
+                  alt="Selected preview"
                   onLoad={(event) => {
                     const { naturalWidth, naturalHeight } = event.currentTarget;
                     setPreviewDimensions((previous) => {
@@ -2168,7 +1956,7 @@ export default function CropImagePage() {
                 >
                   <img
                     src={previewFile.src}
-                    alt={`Estimated crop for ${previewFile.name}`}
+                    alt="Estimated crop preview"
                     style={croppedOutputImageStyle}
                   />
                 </div>
@@ -2179,8 +1967,6 @@ export default function CropImagePage() {
       </s-section>
 
       <s-section heading="Cropped output">
-        <s-paragraph>Status: {apiStatusText}</s-paragraph>
-
         <s-stack direction="inline" gap="base">
           <s-button
             variant="secondary"
@@ -2202,8 +1988,8 @@ export default function CropImagePage() {
             Reset selection
           </s-button>
           <s-text tone="subdued">
-            Downloads use a generated link once the FastAPI batch ZIP has been
-            fully prepared.
+            Downloads use a generated link once the batch ZIP has been fully
+            prepared.
           </s-text>
         </s-stack>
       </s-section>
