@@ -106,6 +106,7 @@ const AUTH_REDIRECT_MESSAGE =
   "Request was redirected to a login page. Verify your app/auth URL configuration and try again.";
 const SERVER_ERROR_MESSAGE =
   "The server encountered an error while processing your crop request. Please try again shortly.";
+const SUPPORT_COPY_INSTRUCTION = "Copy technical details for support.";
 const PRESET_ASPECT_RATIO_HINTS = {
   portrait: 4 / 5,
   square: 1,
@@ -283,6 +284,77 @@ async function buildResponseDiagnostics(response) {
     contentType,
     textSnippet,
   };
+}
+
+function redactSensitiveText(rawValue, maxLength = 180) {
+  const value = String(rawValue || "").replace(/\s+/g, " ").trim();
+  if (!value) {
+    return "";
+  }
+
+  const redacted = value
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer [redacted]")
+    .replace(/(id_token|token|access_token|authorization)=([^&\s]+)/gi, "$1=[redacted]")
+    .replace(/([A-Za-z0-9_-]{20,}\.[A-Za-z0-9._-]{10,})/g, "[redacted-token]");
+
+  return redacted.slice(0, maxLength);
+}
+
+function extractEndpointPath(urlLike) {
+  const rawValue = String(urlLike || "").trim();
+  if (!rawValue) {
+    return "unknown";
+  }
+
+  try {
+    const parsedUrl = new URL(rawValue, "http://localhost");
+    return `${parsedUrl.pathname || "/"}${parsedUrl.search ? "?…" : ""}`;
+  } catch {
+    return rawValue.split("?")[0] || "unknown";
+  }
+}
+
+function buildErrorTechnicalDetails({
+  correlationId,
+  phase,
+  diagnostics,
+  fallbackMessage,
+}) {
+  return {
+    correlationId,
+    phase,
+    statusCode:
+      typeof diagnostics?.status === "number" ? diagnostics.status : undefined,
+    endpointPath: extractEndpointPath(diagnostics?.url),
+    responseContentType: redactSensitiveText(diagnostics?.contentType, 80),
+    serverMessage: redactSensitiveText(
+      diagnostics?.textSnippet || fallbackMessage || "",
+    ),
+  };
+}
+
+function generateCorrelationId() {
+  const cryptoApi =
+    typeof window !== "undefined" && window.crypto ? window.crypto : null;
+
+  if (cryptoApi && typeof cryptoApi.randomUUID === "function") {
+    return cryptoApi.randomUUID();
+  }
+
+  return `corr-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildSupportToastMessage(message) {
+  const baseMessage = String(message || "Unable to crop image.").trim();
+  if (!baseMessage) {
+    return SUPPORT_COPY_INSTRUCTION;
+  }
+
+  if (baseMessage.includes(SUPPORT_COPY_INSTRUCTION)) {
+    return baseMessage;
+  }
+
+  return `${baseMessage} ${SUPPORT_COPY_INSTRUCTION}`;
 }
 
 async function readJsonPayload(response, diagnostics = null) {
@@ -1012,6 +1084,8 @@ export default function CropImagePage() {
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [downloadResult, setDownloadResult] = useState(null);
   const [downloadUrl, setDownloadUrl] = useState("");
+  const [cropFailureSummary, setCropFailureSummary] = useState("");
+  const [cropFailureDetails, setCropFailureDetails] = useState(null);
 
   const getPendingJobId = useCallback(() => {
     if (typeof window === "undefined") {
@@ -1107,7 +1181,11 @@ export default function CropImagePage() {
   );
 
   const pollCropJobStatus = useCallback(
-    async (jobId, requestBasePath = resolveCropRequestBasePath()) => {
+    async (
+      jobId,
+      requestBasePath = resolveCropRequestBasePath(),
+      correlationId = generateCorrelationId(),
+    ) => {
       const statusPath = `${requestBasePath}/status/${encodeURIComponent(jobId)}`;
 
       let jobStatus = null;
@@ -1153,20 +1231,38 @@ export default function CropImagePage() {
 
           console.warn("Unexpected crop status response", {
             jobId,
+            correlationId,
             diagnostics: statusDiagnostics,
           });
 
-          throw new Error(getResponseErrorMessage(statusDiagnostics));
+          const pollError = new Error(getResponseErrorMessage(statusDiagnostics));
+          pollError.technicalDetails = buildErrorTechnicalDetails({
+            correlationId,
+            phase: "poll",
+            diagnostics: statusDiagnostics,
+            fallbackMessage: pollError.message,
+          });
+          throw pollError;
         }
 
         jobStatus = await readJsonPayload(statusResponse, statusDiagnostics);
         if (!jobStatus || typeof jobStatus !== "object") {
           console.warn("Malformed crop status payload", {
             jobId,
+            correlationId,
             diagnostics: statusDiagnostics,
             payload: jobStatus,
           });
-          throw new Error(getUnexpectedResponseMessage(statusDiagnostics));
+          const malformedError = new Error(
+            getUnexpectedResponseMessage(statusDiagnostics),
+          );
+          malformedError.technicalDetails = buildErrorTechnicalDetails({
+            correlationId,
+            phase: "poll",
+            diagnostics: statusDiagnostics,
+            fallbackMessage: malformedError.message,
+          });
+          throw malformedError;
         }
         isDone = jobStatus?.status === "done" || jobStatus?.status === "error";
 
@@ -1202,10 +1298,13 @@ export default function CropImagePage() {
       setIsSubmittingDownload(true);
       setDownloadResult(null);
       setDownloadUrl("");
+      const correlationId = generateCorrelationId();
       showToast("Resuming your previous crop job...");
+      setCropFailureSummary("");
+      setCropFailureDetails(null);
 
       try {
-        const jobStatus = await pollCropJobStatus(pendingJobId);
+        const jobStatus = await pollCropJobStatus(pendingJobId, undefined, correlationId);
         if (cancelled) {
           return;
         }
@@ -1223,10 +1322,28 @@ export default function CropImagePage() {
           return;
         }
 
+        const technicalDetails =
+          error && typeof error === "object" && "technicalDetails" in error
+            ? error.technicalDetails
+            : {
+              correlationId,
+              phase: "resume",
+              serverMessage: redactSensitiveText(
+                error instanceof Error ? error.message : String(error),
+              ),
+            };
+
+        setCropFailureSummary(
+          error instanceof Error ? error.message : "Unable to resume crop job.",
+        );
+        setCropFailureDetails(technicalDetails);
+
         showToast(
-          error instanceof Error
-            ? error.message
-            : "Unable to resume crop job.",
+          buildSupportToastMessage(
+            error instanceof Error
+              ? error.message
+              : "Unable to resume crop job.",
+          ),
           { isError: true },
         );
       } finally {
@@ -1765,7 +1882,10 @@ export default function CropImagePage() {
     setIsSubmittingDownload(true);
     setDownloadResult(null);
     setDownloadUrl("");
+    setCropFailureSummary("");
+    setCropFailureDetails(null);
     showToast("Cropping started. Processing images...");
+    const correlationId = generateCorrelationId();
 
     try {
       if (!shopify || typeof shopify.idToken !== "function") {
@@ -1810,21 +1930,39 @@ export default function CropImagePage() {
 
       if (!response.ok) {
         console.warn("Unexpected crop submit response", {
-          requestUrl,
+          correlationId,
+          endpointPath: extractEndpointPath(requestUrl),
           diagnostics: responseDiagnostics,
         });
-        throw new Error(getResponseErrorMessage(responseDiagnostics));
+        const submitError = new Error(getResponseErrorMessage(responseDiagnostics));
+        submitError.technicalDetails = buildErrorTechnicalDetails({
+          correlationId,
+          phase: "submit",
+          diagnostics: responseDiagnostics,
+          fallbackMessage: submitError.message,
+        });
+        throw submitError;
       }
 
       responsePayload = await readJsonPayload(response, responseDiagnostics);
 
       if (!responsePayload || typeof responsePayload !== "object") {
         console.warn("Malformed crop submit payload", {
-          requestUrl,
+          correlationId,
+          endpointPath: extractEndpointPath(requestUrl),
           diagnostics: responseDiagnostics,
           payload: responsePayload,
         });
-        throw new Error(getUnexpectedResponseMessage(responseDiagnostics));
+        const malformedError = new Error(
+          getUnexpectedResponseMessage(responseDiagnostics),
+        );
+        malformedError.technicalDetails = buildErrorTechnicalDetails({
+          correlationId,
+          phase: "submit",
+          diagnostics: responseDiagnostics,
+          fallbackMessage: malformedError.message,
+        });
+        throw malformedError;
       }
 
       if (typeof responsePayload?.error === "string" && responsePayload.error) {
@@ -1839,7 +1977,11 @@ export default function CropImagePage() {
       }
 
       setPendingJobId(responseJobId);
-      const jobStatus = await pollCropJobStatus(responseJobId, requestPath);
+      const jobStatus = await pollCropJobStatus(
+        responseJobId,
+        requestPath,
+        correlationId,
+      );
 
       if (!jobStatus?.downloadUrl) {
         throw new Error(jobStatus?.error || "Crop finished without a download URL.");
@@ -1847,13 +1989,33 @@ export default function CropImagePage() {
 
       setDownloadUrl(jobStatus.downloadUrl);
       setDownloadResult(jobStatus.cropSummary || null);
+      setCropFailureSummary("");
+      setCropFailureDetails(null);
 
       showToast("Crop completed. Click Download ZIP to get your file.");
     } catch (error) {
+      const technicalDetails =
+        error && typeof error === "object" && "technicalDetails" in error
+          ? error.technicalDetails
+          : {
+            correlationId,
+            phase: "submit",
+            serverMessage: redactSensitiveText(
+              error instanceof Error ? error.message : String(error),
+            ),
+          };
+
+      setCropFailureSummary(
+        error instanceof Error ? error.message : "Unable to crop image.",
+      );
+      setCropFailureDetails(technicalDetails);
+
       showToast(
-        error instanceof Error
-          ? error.message
-          : "Unable to crop image.",
+        buildSupportToastMessage(
+          error instanceof Error
+            ? error.message
+            : "Unable to crop image.",
+        ),
         { isError: true },
       );
     } finally {
@@ -2279,6 +2441,27 @@ export default function CropImagePage() {
             </s-button>
 
             {isSubmittingDownload && <s-text>Processing images…</s-text>}
+            {cropFailureSummary && (
+              <s-box
+                padding="base"
+                border="base"
+                borderRadius="base"
+                background="bg-fill-critical-secondary"
+              >
+                <s-stack direction="block" gap="small">
+                  <s-text fontWeight="semibold" tone="critical">
+                    Crop request failed
+                  </s-text>
+                  <s-text tone="critical">{cropFailureSummary}</s-text>
+                  <details>
+                    <summary>Technical details</summary>
+                    <pre style={{ whiteSpace: "pre-wrap", marginTop: "8px" }}>
+{JSON.stringify(cropFailureDetails, null, 2)}
+                    </pre>
+                  </details>
+                </s-stack>
+              </s-box>
+            )}
             {downloadUrl && (
               <s-box padding="base" border="base" borderRadius="base">
                 <s-stack direction="block" gap="small">
