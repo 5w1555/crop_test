@@ -1474,9 +1474,19 @@ export default function CropImagePage() {
 
       let jobStatus = null;
       let isDone = false;
+      let pollDelayMs = 2000;
+      const pollDelayCapMs = 10000;
+      const pollStartedAtMs = Date.now();
+      const pollTimeoutMs = 3 * 60 * 1000;
 
       while (!isDone) {
-        await new Promise((resolve) => setTimeout(resolve, 2000));
+        if (Date.now() - pollStartedAtMs >= pollTimeoutMs) {
+          throw new Error(
+            "Cropping is taking longer than expected. Please retry.",
+          );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
 
         const statusResponse = await fetch(statusUrl, {
           method: "GET",
@@ -1484,6 +1494,12 @@ export default function CropImagePage() {
             Authorization: `Bearer ${idToken}`,
           },
         });
+
+        if (statusResponse.status === 404) {
+          throw new Error(
+            "Your crop job could not be found. Something went wrong—please retry.",
+          );
+        }
 
         if (!statusResponse.ok) {
           throw new Error(`Status request failed (${statusResponse.status}).`);
@@ -1495,7 +1511,11 @@ export default function CropImagePage() {
         }
 
         jobStatus = await statusResponse.json();
-        isDone = jobStatus?.status === "done";
+        isDone = jobStatus?.status === "done" || jobStatus?.status === "error";
+
+        if (!isDone) {
+          pollDelayMs = Math.min(pollDelayMs * 2, pollDelayCapMs);
+        }
       }
 
       if (!jobStatus?.downloadUrl) {
