@@ -46,6 +46,8 @@ services:
         value: 3.11.11
       - key: SMARTCROP_FRONTEND_ORIGINS
         value: https://smart-crop-app.onrender.com
+      - key: DOWNLOAD_BASE_URL
+        value: https://smart-crop-api-f97p.onrender.com
       - key: SMARTCROP_MAX_UPLOAD_MB
         value: "12"
       - key: SMARTCROP_MAX_BATCH_FILES

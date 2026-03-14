@@ -881,7 +881,7 @@ export const action = async ({ request }) => {
     return jsonError(planReservation.error, 403, { plan: planReservation.plan });
   }
 
-  const jobId = createCropJob({
+  const jobId = await createCropJob({
     shop: session.shop,
     files,
     startedAt,
@@ -924,7 +924,6 @@ export default function CropImagePage() {
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
   const [downloadResult, setDownloadResult] = useState(null);
   const [downloadUrl, setDownloadUrl] = useState("");
-  const [downloadFilename, setDownloadFilename] = useState("cropped_batch.zip");
 
   const getPendingJobId = useCallback(() => {
     if (typeof window === "undefined") {
@@ -1108,7 +1107,6 @@ export default function CropImagePage() {
       setIsSubmittingDownload(true);
       setDownloadResult(null);
       setDownloadUrl("");
-      setDownloadFilename("cropped_batch.zip");
       showToast("Resuming your previous crop job...");
 
       try {
@@ -1122,7 +1120,6 @@ export default function CropImagePage() {
         }
 
         setDownloadUrl(jobStatus.downloadUrl);
-        setDownloadFilename(jobStatus.filename || "cropped_batch.zip");
         setDownloadResult(jobStatus.cropSummary || null);
 
         showToast("Crop completed. Click Download ZIP to get your file.");
@@ -1688,7 +1685,6 @@ export default function CropImagePage() {
     setIsSubmittingDownload(true);
     setDownloadResult(null);
     setDownloadUrl("");
-    setDownloadFilename("cropped_batch.zip");
     showToast("Cropping started. Processing images...");
 
     try {
@@ -1757,7 +1753,6 @@ export default function CropImagePage() {
       }
 
       setDownloadUrl(jobStatus.downloadUrl);
-      setDownloadFilename(jobStatus.filename || "cropped_batch.zip");
       setDownloadResult(jobStatus.cropSummary || null);
 
       showToast("Crop completed. Click Download ZIP to get your file.");
@@ -2207,9 +2202,18 @@ export default function CropImagePage() {
                       Failed files: {downloadResult.failedFiles.join(", ")}
                     </s-text>
                   )}
-                  <a href={downloadUrl} target="_blank" rel="noopener noreferrer" download={downloadFilename}>
+                  <s-button
+                    variant="primary"
+                    onClick={() => {
+                      try {
+                        window.top.open(downloadUrl, "_blank");
+                      } catch {
+                        window.open(downloadUrl, "_blank");
+                      }
+                    }}
+                  >
                     Download ZIP
-                  </a>
+                  </s-button>
                 </s-stack>
               </s-box>
             )}
