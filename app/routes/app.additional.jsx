@@ -922,9 +922,9 @@ export default function CropImagePage() {
   const [isCropPointerActive, setIsCropPointerActive] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
   const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
-  const [isReadyToDownload, setIsReadyToDownload] = useState(false);
   const [downloadResult, setDownloadResult] = useState(null);
-  const [downloadLink, setDownloadLink] = useState(null);
+  const [downloadUrl, setDownloadUrl] = useState("");
+  const [downloadFilename, setDownloadFilename] = useState("cropped_batch.zip");
 
   const getPendingJobId = useCallback(() => {
     if (typeof window === "undefined") {
@@ -1106,9 +1106,9 @@ export default function CropImagePage() {
 
     const resumePendingCrop = async () => {
       setIsSubmittingDownload(true);
-      setIsReadyToDownload(false);
       setDownloadResult(null);
-      setDownloadLink(null);
+      setDownloadUrl("");
+      setDownloadFilename("cropped_batch.zip");
       showToast("Resuming your previous crop job...");
 
       try {
@@ -1121,16 +1121,11 @@ export default function CropImagePage() {
           throw new Error(jobStatus?.error || "Crop finished without a download URL.");
         }
 
-        setDownloadLink({
-          url: jobStatus.downloadUrl,
-          filename: jobStatus.filename || "cropped_batch.zip",
-          expiresIn: jobStatus.expiresIn || 600,
-        });
+        setDownloadUrl(jobStatus.downloadUrl);
+        setDownloadFilename(jobStatus.filename || "cropped_batch.zip");
         setDownloadResult(jobStatus.cropSummary || null);
-        setIsReadyToDownload(true);
 
-        window.open(jobStatus.downloadUrl, "_blank", "noopener,noreferrer");
-        showToast("Crop completed. Your ZIP is ready to download.");
+        showToast("Crop completed. Click Download ZIP to get your file.");
       } catch (error) {
         if (cancelled) {
           return;
@@ -1691,11 +1686,9 @@ export default function CropImagePage() {
 
     setCropValidationError("");
     setIsSubmittingDownload(true);
-    setIsReadyToDownload(false);
     setDownloadResult(null);
-    if (downloadLink) {
-      setDownloadLink(null);
-    }
+    setDownloadUrl("");
+    setDownloadFilename("cropped_batch.zip");
     showToast("Cropping started. Processing images...");
 
     try {
@@ -1763,16 +1756,11 @@ export default function CropImagePage() {
         throw new Error(jobStatus?.error || "Crop finished without a download URL.");
       }
 
-      setDownloadLink({
-        url: jobStatus.downloadUrl,
-        filename: jobStatus.filename || "cropped_batch.zip",
-        expiresIn: jobStatus.expiresIn || 600,
-      });
+      setDownloadUrl(jobStatus.downloadUrl);
+      setDownloadFilename(jobStatus.filename || "cropped_batch.zip");
       setDownloadResult(jobStatus.cropSummary || null);
-      setIsReadyToDownload(true);
 
-      window.open(jobStatus.downloadUrl, "_blank", "noopener,noreferrer");
-      showToast("Crop completed. Your ZIP is ready to download.");
+      showToast("Crop completed. Click Download ZIP to get your file.");
     } catch (error) {
       showToast(
         error instanceof Error
@@ -1784,14 +1772,6 @@ export default function CropImagePage() {
       setIsSubmittingDownload(false);
     }
   };
-
-  const handleDownloadReadyZip = useCallback(() => {
-    if (!downloadLink) {
-      return;
-    }
-
-    window.open(downloadLink.url, "_blank", "noopener,noreferrer");
-  }, [downloadLink]);
 
   return (
     <s-page heading="Crop Images">
@@ -2211,7 +2191,7 @@ export default function CropImagePage() {
             </s-button>
 
             {isSubmittingDownload && <s-text>Processing images…</s-text>}
-            {isReadyToDownload && downloadLink && (
+            {downloadUrl && (
               <s-box padding="base" border="base" borderRadius="base">
                 <s-stack direction="block" gap="small">
                   <s-text fontWeight="semibold">Batch results</s-text>
@@ -2227,9 +2207,9 @@ export default function CropImagePage() {
                       Failed files: {downloadResult.failedFiles.join(", ")}
                     </s-text>
                   )}
-                  <s-button type="button" onClick={handleDownloadReadyZip}>
+                  <a href={downloadUrl} target="_blank" rel="noopener noreferrer" download={downloadFilename}>
                     Download ZIP
-                  </s-button>
+                  </a>
                 </s-stack>
               </s-box>
             )}
