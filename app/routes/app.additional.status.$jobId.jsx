@@ -1,3 +1,4 @@
+import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { getCropJob } from "../utils/cropJobs.server.js";
 
@@ -33,4 +34,8 @@ export const loader = async ({ request, params }) => {
     cropSummary: job.cropSummary || undefined,
     error: job.error || undefined,
   });
+};
+
+export const headers = (headersArgs) => {
+  return boundary.headers(headersArgs);
 };

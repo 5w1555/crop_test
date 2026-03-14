@@ -159,7 +159,7 @@ const CROP_RESIZE_HANDLES = [
   "sw",
   "se",
 ];
-const STABLE_EMBED_QUERY_PARAM_KEYS = ["shop", "host"];
+const STABLE_EMBED_QUERY_PARAM_KEYS = ["shop", "host", "embedded"];
 
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) {
@@ -405,9 +405,9 @@ function extractCropJobId(payload) {
     : null;
 }
 
-function buildAllowedEmbedQueryString(search) {
+function buildEmbeddedRequestQueryString(search, sessionToken = "") {
   if (!search) {
-    return "";
+    return sessionToken ? `?id_token=${encodeURIComponent(sessionToken)}` : "";
   }
 
   const params = new URLSearchParams(search);
@@ -418,6 +418,10 @@ function buildAllowedEmbedQueryString(search) {
     if (value) {
       allowedParams.set(key, value);
     }
+  }
+
+  if (sessionToken) {
+    allowedParams.set("id_token", sessionToken);
   }
 
   const allowedSearch = allowedParams.toString();
@@ -1063,9 +1067,7 @@ export default function CropImagePage() {
 
   const pollCropJobStatus = useCallback(
     async (jobId) => {
-      const statusUrl = `/app/additional/status/${jobId}${buildAllowedEmbedQueryString(
-        typeof window === "undefined" ? "" : window.location.search,
-      )}`;
+      const statusPath = `/app/additional/status/${jobId}`;
 
       let jobStatus = null;
       let isDone = false;
@@ -1084,6 +1086,10 @@ export default function CropImagePage() {
         await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
 
         const idToken = await shopify.idToken();
+        const statusUrl = `${statusPath}${buildEmbeddedRequestQueryString(
+          typeof window === "undefined" ? "" : window.location.search,
+          idToken,
+        )}`;
         const statusResponse = await fetch(statusUrl, {
           method: "GET",
           headers: {
@@ -1690,7 +1696,7 @@ export default function CropImagePage() {
       return;
     }
 
-    const requestUrl = (() => {
+    const requestPath = (() => {
       if (typeof window === "undefined") {
         return form.action || "/app/additional";
       }
@@ -1701,10 +1707,10 @@ export default function CropImagePage() {
       );
 
       if (!url.pathname || url.pathname === "/") {
-        return `/app/additional${buildAllowedEmbedQueryString(window.location.search)}`;
+        return "/app/additional";
       }
 
-      return `${url.pathname}${buildAllowedEmbedQueryString(window.location.search)}`;
+      return url.pathname;
     })();
 
     if (!hasValidSelection) {
@@ -1761,6 +1767,10 @@ export default function CropImagePage() {
       }
 
       const idToken = await shopify.idToken();
+      const requestUrl = `${requestPath}${buildEmbeddedRequestQueryString(
+        typeof window === "undefined" ? "" : window.location.search,
+        idToken,
+      )}`;
       const response = await fetch(requestUrl, {
         method: "POST",
         body: formData,
