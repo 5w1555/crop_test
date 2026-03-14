@@ -1,6 +1,6 @@
 # Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
 
-client_id = "1REDACTED"
+client_id = "1586f091aab94823b19a1d785ec0a7a5"
 name = "SmartCrop"
 application_url = "https://smart-crop-app.onrender.com"
 embedded = true
