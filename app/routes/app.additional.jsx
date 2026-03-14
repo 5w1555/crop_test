@@ -428,6 +428,21 @@ function buildEmbeddedRequestQueryString(search, sessionToken = "") {
   return allowedSearch ? `?${allowedSearch}` : "";
 }
 
+function resolveCropRequestBasePath(formAction = "") {
+  if (typeof window === "undefined") {
+    return formAction || "/app/additional";
+  }
+
+  const resolvedAction = formAction || window.location.pathname || "/app/additional";
+  const url = new URL(resolvedAction, window.location.origin);
+
+  if (!url.pathname || url.pathname === "/") {
+    return "/app/additional";
+  }
+
+  return url.pathname;
+}
+
 function getPreviewAnchorBias(anchorHint, method) {
   const normalizedAnchor = String(anchorHint || "")
     .trim()
@@ -1066,8 +1081,8 @@ export default function CropImagePage() {
   );
 
   const pollCropJobStatus = useCallback(
-    async (jobId) => {
-      const statusPath = `/app/additional/status/${jobId}`;
+    async (jobId, requestBasePath = resolveCropRequestBasePath()) => {
+      const statusPath = `${requestBasePath}/status/${encodeURIComponent(jobId)}`;
 
       let jobStatus = null;
       let isDone = false;
@@ -1696,22 +1711,7 @@ export default function CropImagePage() {
       return;
     }
 
-    const requestPath = (() => {
-      if (typeof window === "undefined") {
-        return form.action || "/app/additional";
-      }
-
-      const url = new URL(
-        form.action || window.location.href,
-        window.location.origin,
-      );
-
-      if (!url.pathname || url.pathname === "/") {
-        return "/app/additional";
-      }
-
-      return url.pathname;
-    })();
+    const requestPath = resolveCropRequestBasePath(form.action);
 
     if (!hasValidSelection) {
       if (fileError) {
@@ -1813,7 +1813,7 @@ export default function CropImagePage() {
       }
 
       setPendingJobId(responseJobId);
-      const jobStatus = await pollCropJobStatus(responseJobId);
+      const jobStatus = await pollCropJobStatus(responseJobId, requestPath);
 
       if (!jobStatus?.downloadUrl) {
         throw new Error(jobStatus?.error || "Crop finished without a download URL.");
