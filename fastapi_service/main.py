@@ -3,6 +3,7 @@ import io
 import math
 import asyncio
 import json
+import logging
 import secrets
 import zipfile
 import mimetypes
@@ -13,6 +14,9 @@ import multiprocessing
 from pathlib import Path
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 
 DOWNLOAD_BASE_URL = os.getenv("DOWNLOAD_BASE_URL", "").rstrip("/")
@@ -2406,32 +2410,32 @@ async def crop_batch_endpoint(
     Upload multiple images and return a ZIP containing cropped outputs in original formats.
     Invalid files are skipped and recorded in manifest.json inside the ZIP.
     """
-    uploaded_files = files or file or []
-
-    if not uploaded_files:
-        raise HTTPException(status_code=400, detail="No files uploaded")
-
-    if len(uploaded_files) > MAX_BATCH_FILES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"Too many files. Max {MAX_BATCH_FILES} files per batch request.",
-        )
-
-    zip_buffer = io.BytesIO()
-    manifest = {"pipeline": _normalize_pipeline(pipeline), "method": method, "processed": [], "failed": []}
-    crop_options = parse_crop_options(
-        target_aspect_ratio=target_aspect_ratio,
-        margin_top=margin_top,
-        margin_right=margin_right,
-        margin_bottom=margin_bottom,
-        margin_left=margin_left,
-        anchor_hint=anchor_hint,
-        crop_coordinates=crop_coordinates,
-        filters=filters,
-    )
-    used_output_names = {}
-
     try:
+        uploaded_files = files or file or []
+
+        if not uploaded_files:
+            raise HTTPException(status_code=400, detail="No files uploaded")
+
+        if len(uploaded_files) > MAX_BATCH_FILES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"Too many files. Max {MAX_BATCH_FILES} files per batch request.",
+            )
+
+        zip_buffer = io.BytesIO()
+        manifest = {"pipeline": _normalize_pipeline(pipeline), "method": method, "processed": [], "failed": []}
+        crop_options = parse_crop_options(
+            target_aspect_ratio=target_aspect_ratio,
+            margin_top=margin_top,
+            margin_right=margin_right,
+            margin_bottom=margin_bottom,
+            margin_left=margin_left,
+            anchor_hint=anchor_hint,
+            crop_coordinates=crop_coordinates,
+            filters=filters,
+        )
+        used_output_names = {}
+
         with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
             for index, uploaded_file in enumerate(uploaded_files, start=1):
                 suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
@@ -2489,37 +2493,43 @@ async def crop_batch_endpoint(
                         pass
 
             zip_file.writestr("manifest.json", json.dumps(manifest, indent=2))
-    except Exception:
-        raise
 
-    if not manifest["processed"]:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "No files were successfully cropped",
-                "failed": manifest["failed"],
-            },
-        )
+        if not manifest["processed"]:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": "No files were successfully cropped",
+                    "failed": manifest["failed"],
+                },
+            )
 
-    zip_bytes = zip_buffer.getvalue()
+        zip_bytes = zip_buffer.getvalue()
 
-    try:
-        presigned_url = await asyncio.to_thread(
-            _upload_batch_zip_to_r2,
-            zip_bytes,
-            "cropped_batch.zip",
-            R2_PRESIGNED_EXPIRY_SECONDS,
-        )
-    except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
-    except Exception as exc:
-        raise HTTPException(status_code=502, detail=f"Unable to upload ZIP to R2: {exc}") from exc
+        try:
+            presigned_url = await asyncio.to_thread(
+                _upload_batch_zip_to_r2,
+                zip_bytes,
+                "cropped_batch.zip",
+                R2_PRESIGNED_EXPIRY_SECONDS,
+            )
+        except RuntimeError as exc:
+            raise HTTPException(status_code=500, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Unable to upload ZIP to R2: {exc}") from exc
 
-    return {
-        "downloadUrl": _build_download_url(presigned_url),
-        "filename": "cropped_batch.zip",
-        "expiresIn": R2_PRESIGNED_EXPIRY_SECONDS,
-    }
+        return {
+            "downloadUrl": _build_download_url(presigned_url),
+            "filename": "cropped_batch.zip",
+            "expiresIn": R2_PRESIGNED_EXPIRY_SECONDS,
+        }
+    except Exception as e:
+        import traceback
+
+        tb = traceback.format_exc()
+        print("=== CROP BATCH FATAL ===")
+        print(tb)
+        print("========================")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 if __name__ == "__main__":
