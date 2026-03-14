@@ -115,23 +115,12 @@ When updating any pinned package (especially `insightface`, `onnxruntime`, `open
   - Reuses the same crop pipeline as `/crop` for each image (face detect + selected method + fallback crop when no face is detected).
   - Skips invalid/failed files and records failures in `manifest.json` inside the generated ZIP.
   - If every file fails, returns HTTP 400 with failure details.
-  - Uploads the ZIP bytes to Cloudflare R2 and returns a pre-signed URL.
+  - Writes the ZIP to temporary local storage (`/tmp/smartcrop-downloads`) and returns a FastAPI download URL.
 - Response (`application/json`):
-  - `downloadUrl`: pre-signed GET URL for direct browser download from R2.
+  - `downloadUrl`: FastAPI endpoint for direct browser download (`/downloads/{token}`).
   - `filename`: suggested download filename (`cropped_batch.zip`).
-  - `expiresIn`: URL TTL in seconds (currently `600`).
+  - `expiresIn`: URL TTL in seconds (controlled by `SMARTCROP_DOWNLOAD_TTL_SECONDS`, default `600`).
 
-### R2 configuration for batch ZIP downloads
-
-Set these environment variables on the FastAPI service:
-
-- `R2_ACCOUNT_ID`
-- `R2_ACCESS_KEY_ID`
-- `R2_SECRET_ACCESS_KEY`
-- `R2_BUCKET`
-- `DOWNLOAD_BASE_URL` (recommended when your batch endpoint can return relative download paths in some environments; for Render this should be your FastAPI public URL, for example `https://smart-crop-api-f97p.onrender.com`)
-
-The service targets the S3-compatible endpoint:
-`https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
-
-Also configure an R2 lifecycle rule for the `smartcrop/batch/` prefix to expire objects after 1 day.
+### `GET /downloads/{download_token}`
+- Returns the generated ZIP (`application/zip`) for a valid, non-expired token.
+- Tokens and files are temporary and expire automatically based on `SMARTCROP_DOWNLOAD_TTL_SECONDS`.
