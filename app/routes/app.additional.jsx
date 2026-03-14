@@ -155,6 +155,7 @@ const CROP_RESIZE_HANDLES = [
   "sw",
   "se",
 ];
+const STABLE_EMBED_QUERY_PARAM_KEYS = ["shop", "host"];
 
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) {
@@ -258,6 +259,25 @@ function normalizeFilters(rawValue) {
   }
 
   return { value, normalizedFilters, error: null };
+}
+
+function buildAllowedEmbedQueryString(search) {
+  if (!search) {
+    return "";
+  }
+
+  const params = new URLSearchParams(search);
+  const allowedParams = new URLSearchParams();
+
+  for (const key of STABLE_EMBED_QUERY_PARAM_KEYS) {
+    const value = params.get(key);
+    if (value) {
+      allowedParams.set(key, value);
+    }
+  }
+
+  const allowedSearch = allowedParams.toString();
+  return allowedSearch ? `?${allowedSearch}` : "";
 }
 
 function getPreviewAnchorBias(anchorHint, method) {
@@ -900,7 +920,9 @@ export default function CropImagePage() {
 
   const pollCropJobStatus = useCallback(
     async (jobId) => {
-      const statusUrl = `${window.location.pathname.replace(/\/$/, "")}/status/${jobId}${window.location.search}`;
+      const statusUrl = `/app/additional/status/${jobId}${buildAllowedEmbedQueryString(
+        typeof window === "undefined" ? "" : window.location.search,
+      )}`;
 
       let jobStatus = null;
       let isDone = false;
@@ -1534,11 +1556,11 @@ export default function CropImagePage() {
         window.location.origin,
       );
 
-      if (!url.search) {
-        url.search = window.location.search;
+      if (!url.pathname || url.pathname === "/") {
+        return `/app/additional${buildAllowedEmbedQueryString(window.location.search)}`;
       }
 
-      return `${url.pathname}${url.search}`;
+      return `${url.pathname}${buildAllowedEmbedQueryString(window.location.search)}`;
     })();
 
     if (!hasValidSelection) {
