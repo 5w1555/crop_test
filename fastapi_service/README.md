@@ -129,6 +129,7 @@ Set these environment variables on the FastAPI service:
 - `R2_ACCESS_KEY_ID`
 - `R2_SECRET_ACCESS_KEY`
 - `R2_BUCKET`
+- `DOWNLOAD_BASE_URL` (recommended when your batch endpoint can return relative download paths in some environments; for Render this should be your FastAPI public URL, for example `https://smart-crop-api-f97p.onrender.com`)
 
 The service targets the S3-compatible endpoint:
 `https://{R2_ACCOUNT_ID}.r2.cloudflarestorage.com`
