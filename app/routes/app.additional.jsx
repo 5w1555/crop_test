@@ -99,6 +99,9 @@ const ANCHOR_HINT_OPTIONS = [
 ];
 const SUPPORTED_FILTERS = ["sharpen", "detail", "grayscale"];
 const PREFERENCE_STORAGE_KEY = "crop.additional.preferences";
+const IN_PROGRESS_JOB_STORAGE_KEY = "crop.additional.inProgressJobId";
+const SESSION_EXPIRED_MESSAGE =
+  "Session expired before the crop completed. Refresh the app and try again.";
 const PRESET_ASPECT_RATIO_HINTS = {
   portrait: 4 / 5,
   square: 1,
@@ -802,6 +805,30 @@ export default function CropImagePage() {
   const [downloadResult, setDownloadResult] = useState(null);
   const [downloadLink, setDownloadLink] = useState(null);
 
+  const getPendingJobId = useCallback(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+
+    return window.sessionStorage.getItem(IN_PROGRESS_JOB_STORAGE_KEY) || "";
+  }, []);
+
+  const setPendingJobId = useCallback((jobId) => {
+    if (typeof window === "undefined" || !jobId) {
+      return;
+    }
+
+    window.sessionStorage.setItem(IN_PROGRESS_JOB_STORAGE_KEY, jobId);
+  }, []);
+
+  const clearPendingJobId = useCallback(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    window.sessionStorage.removeItem(IN_PROGRESS_JOB_STORAGE_KEY);
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -870,6 +897,144 @@ export default function CropImagePage() {
     },
     [shopify],
   );
+
+  const pollCropJobStatus = useCallback(
+    async (jobId) => {
+      const statusUrl = `${window.location.pathname.replace(/\/$/, "")}/status/${jobId}${window.location.search}`;
+
+      let jobStatus = null;
+      let isDone = false;
+      let pollDelayMs = 2000;
+      const pollDelayCapMs = 10000;
+      const pollStartedAtMs = Date.now();
+      const pollTimeoutMs = 3 * 60 * 1000;
+
+      while (!isDone) {
+        if (Date.now() - pollStartedAtMs >= pollTimeoutMs) {
+          throw new Error(
+            "Cropping is taking longer than expected. Please retry.",
+          );
+        }
+
+        await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
+
+        const idToken = await shopify.idToken();
+        const statusResponse = await fetch(statusUrl, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+          },
+        });
+
+        if (statusResponse.status === 401) {
+          setPendingJobId(jobId);
+          throw new Error(SESSION_EXPIRED_MESSAGE);
+        }
+
+        if (statusResponse.status === 404) {
+          clearPendingJobId();
+          throw new Error(
+            "Your crop job could not be found. Something went wrong—please retry.",
+          );
+        }
+
+        if (!statusResponse.ok) {
+          throw new Error(`Status request failed (${statusResponse.status}).`);
+        }
+
+        const statusContentType = statusResponse.headers.get("content-type") || "";
+        if (!statusContentType.includes("application/json")) {
+          throw new Error(`Expected JSON status response but received ${statusContentType}.`);
+        }
+
+        jobStatus = await statusResponse.json();
+        isDone = jobStatus?.status === "done" || jobStatus?.status === "error";
+
+        if (!isDone) {
+          pollDelayMs = Math.min(pollDelayMs * 2, pollDelayCapMs);
+        }
+      }
+
+      clearPendingJobId();
+      return jobStatus;
+    },
+    [clearPendingJobId, setPendingJobId, shopify],
+  );
+
+  useEffect(() => {
+    if (
+      typeof window === "undefined" ||
+      isSubmittingDownload ||
+      !shopify ||
+      typeof shopify.idToken !== "function"
+    ) {
+      return;
+    }
+
+    const pendingJobId = getPendingJobId();
+    if (!pendingJobId) {
+      return;
+    }
+
+    let cancelled = false;
+
+    const resumePendingCrop = async () => {
+      setIsSubmittingDownload(true);
+      setIsReadyToDownload(false);
+      setDownloadResult(null);
+      setDownloadLink(null);
+      showToast("Resuming your previous crop job...");
+
+      try {
+        const jobStatus = await pollCropJobStatus(pendingJobId);
+        if (cancelled) {
+          return;
+        }
+
+        if (!jobStatus?.downloadUrl) {
+          throw new Error(jobStatus?.error || "Crop finished without a download URL.");
+        }
+
+        setDownloadLink({
+          url: jobStatus.downloadUrl,
+          filename: jobStatus.filename || "cropped_batch.zip",
+          expiresIn: jobStatus.expiresIn || 600,
+        });
+        setDownloadResult(jobStatus.cropSummary || null);
+        setIsReadyToDownload(true);
+
+        window.open(jobStatus.downloadUrl, "_blank", "noopener,noreferrer");
+        showToast("Crop completed. Your ZIP is ready to download.");
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+
+        showToast(
+          error instanceof Error
+            ? error.message
+            : "Unable to resume crop job.",
+          { isError: true },
+        );
+      } finally {
+        if (!cancelled) {
+          setIsSubmittingDownload(false);
+        }
+      }
+    };
+
+    void resumePendingCrop();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    getPendingJobId,
+    isSubmittingDownload,
+    pollCropJobStatus,
+    shopify,
+    showToast,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -1457,9 +1622,7 @@ export default function CropImagePage() {
       }
 
       if (contentType.includes("text/html")) {
-        throw new Error(
-          "Session expired before the crop completed. Refresh the app and try again.",
-        );
+        throw new Error(SESSION_EXPIRED_MESSAGE);
       }
 
       if (!contentType.includes("application/json")) {
@@ -1470,53 +1633,8 @@ export default function CropImagePage() {
         throw new Error("Missing job ID from crop response.");
       }
 
-      const statusUrl = `${window.location.pathname.replace(/\/$/, "")}/status/${responsePayload.jobId}${window.location.search}`;
-
-      let jobStatus = null;
-      let isDone = false;
-      let pollDelayMs = 2000;
-      const pollDelayCapMs = 10000;
-      const pollStartedAtMs = Date.now();
-      const pollTimeoutMs = 3 * 60 * 1000;
-
-      while (!isDone) {
-        if (Date.now() - pollStartedAtMs >= pollTimeoutMs) {
-          throw new Error(
-            "Cropping is taking longer than expected. Please retry.",
-          );
-        }
-
-        await new Promise((resolve) => setTimeout(resolve, pollDelayMs));
-
-        const statusResponse = await fetch(statusUrl, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${idToken}`,
-          },
-        });
-
-        if (statusResponse.status === 404) {
-          throw new Error(
-            "Your crop job could not be found. Something went wrong—please retry.",
-          );
-        }
-
-        if (!statusResponse.ok) {
-          throw new Error(`Status request failed (${statusResponse.status}).`);
-        }
-
-        const statusContentType = statusResponse.headers.get("content-type") || "";
-        if (!statusContentType.includes("application/json")) {
-          throw new Error(`Expected JSON status response but received ${statusContentType}.`);
-        }
-
-        jobStatus = await statusResponse.json();
-        isDone = jobStatus?.status === "done" || jobStatus?.status === "error";
-
-        if (!isDone) {
-          pollDelayMs = Math.min(pollDelayMs * 2, pollDelayCapMs);
-        }
-      }
+      setPendingJobId(responsePayload.jobId);
+      const jobStatus = await pollCropJobStatus(responsePayload.jobId);
 
       if (!jobStatus?.downloadUrl) {
         throw new Error(jobStatus?.error || "Crop finished without a download URL.");
