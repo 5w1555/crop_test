@@ -71,7 +71,7 @@ async function runCropJob(jobId, { shop, files, options, startedAt }) {
   } catch (error) {
     jobs.set(jobId, {
       ...job,
-      status: "done",
+      status: "error",
       finishedAt: Date.now(),
       error:
         error instanceof Error
