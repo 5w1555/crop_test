@@ -324,6 +324,28 @@ function isLikelyAuthRedirect(diagnostics) {
   );
 }
 
+function isLikelyAuthDocument(diagnostics) {
+  if (!diagnostics) {
+    return false;
+  }
+
+  const lowerContentType = diagnostics.contentType.toLowerCase();
+  const lowerUrl = String(diagnostics.url || "").toLowerCase();
+  const lowerSnippet = String(diagnostics.textSnippet || "").toLowerCase();
+
+  if (!lowerContentType.includes("text/html")) {
+    return false;
+  }
+
+  return (
+    lowerUrl.includes("/login") ||
+    lowerUrl.includes("/auth") ||
+    lowerSnippet.includes("login") ||
+    lowerSnippet.includes("sign in") ||
+    lowerSnippet.includes("shopify")
+  );
+}
+
 function getResponseErrorMessage(diagnostics) {
   if (!diagnostics) {
     return "Unexpected response from the server. Please retry.";
@@ -337,11 +359,32 @@ function getResponseErrorMessage(diagnostics) {
     return AUTH_REDIRECT_MESSAGE;
   }
 
+  if (isLikelyAuthDocument(diagnostics)) {
+    return AUTH_REDIRECT_MESSAGE;
+  }
+
   if (diagnostics.status >= 500) {
     return SERVER_ERROR_MESSAGE;
   }
 
   return `Request failed (${diagnostics.status}). Please retry.`;
+}
+
+function getUnexpectedResponseMessage(diagnostics) {
+  if (!diagnostics) {
+    return "Unexpected response from the server. Please retry.";
+  }
+
+  if (isLikelyAuthRedirect(diagnostics) || isLikelyAuthDocument(diagnostics)) {
+    return AUTH_REDIRECT_MESSAGE;
+  }
+
+  const contentType = String(diagnostics.contentType || "").trim();
+  if (contentType && !contentType.toLowerCase().includes("application/json")) {
+    return `Unexpected response from the server (${contentType}). Please retry.`;
+  }
+
+  return "Unexpected response from the server. Please retry.";
 }
 
 function extractCropJobId(payload) {
@@ -1071,7 +1114,12 @@ export default function CropImagePage() {
 
         jobStatus = await readJsonPayload(statusResponse, statusDiagnostics);
         if (!jobStatus || typeof jobStatus !== "object") {
-          throw new Error("Unexpected status response from the server. Please retry.");
+          console.warn("Malformed crop status payload", {
+            jobId,
+            diagnostics: statusDiagnostics,
+            payload: jobStatus,
+          });
+          throw new Error(getUnexpectedResponseMessage(statusDiagnostics));
         }
         isDone = jobStatus?.status === "done" || jobStatus?.status === "error";
 
@@ -1733,6 +1781,15 @@ export default function CropImagePage() {
       }
 
       responsePayload = await readJsonPayload(response, responseDiagnostics);
+
+      if (!responsePayload || typeof responsePayload !== "object") {
+        console.warn("Malformed crop submit payload", {
+          requestUrl,
+          diagnostics: responseDiagnostics,
+          payload: responsePayload,
+        });
+        throw new Error(getUnexpectedResponseMessage(responseDiagnostics));
+      }
 
       if (typeof responsePayload?.error === "string" && responsePayload.error) {
         showToast(responsePayload.error, { isError: true });
