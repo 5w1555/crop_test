@@ -14,6 +14,21 @@ from pathlib import Path
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 
+
+DOWNLOAD_BASE_URL = os.getenv("DOWNLOAD_BASE_URL", "").rstrip("/")
+
+
+def _build_download_url(url: str) -> str:
+    if not url:
+        return url
+    if url.startswith(("http://", "https://")):
+        return url
+    if not DOWNLOAD_BASE_URL:
+        return url
+    if not url.startswith("/"):
+        url = f"/{url}"
+    return f"{DOWNLOAD_BASE_URL}{url}"
+
 import cv2
 import numpy as np
 from PIL import Image, ImageCms, ImageOps, ImageFilter, ImageEnhance, ImageDraw
@@ -2501,7 +2516,7 @@ async def crop_batch_endpoint(
         raise HTTPException(status_code=502, detail=f"Unable to upload ZIP to R2: {exc}") from exc
 
     return {
-        "downloadUrl": presigned_url,
+        "downloadUrl": _build_download_url(presigned_url),
         "filename": "cropped_batch.zip",
         "expiresIn": R2_PRESIGNED_EXPIRY_SECONDS,
     }
