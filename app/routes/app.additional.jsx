@@ -344,6 +344,24 @@ function getResponseErrorMessage(diagnostics) {
   return `Request failed (${diagnostics.status}). Please retry.`;
 }
 
+function extractCropJobId(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  const candidateId =
+    payload.jobId ||
+    payload.jobID ||
+    payload.job_id ||
+    payload.id ||
+    payload?.job?.id ||
+    null;
+
+  return typeof candidateId === "string" && candidateId.trim()
+    ? candidateId.trim()
+    : null;
+}
+
 function buildAllowedEmbedQueryString(search) {
   if (!search) {
     return "";
@@ -1732,12 +1750,14 @@ export default function CropImagePage() {
         return;
       }
 
-      if (!responsePayload?.jobId) {
+      const responseJobId = extractCropJobId(responsePayload);
+
+      if (!responseJobId) {
         throw new Error("Missing job ID from crop response.");
       }
 
-      setPendingJobId(responsePayload.jobId);
-      const jobStatus = await pollCropJobStatus(responsePayload.jobId);
+      setPendingJobId(responseJobId);
+      const jobStatus = await pollCropJobStatus(responseJobId);
 
       if (!jobStatus?.downloadUrl) {
         throw new Error(jobStatus?.error || "Crop finished without a download URL.");
