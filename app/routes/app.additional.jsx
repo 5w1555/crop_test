@@ -100,8 +100,12 @@ const ANCHOR_HINT_OPTIONS = [
 const SUPPORTED_FILTERS = ["sharpen", "detail", "grayscale"];
 const PREFERENCE_STORAGE_KEY = "crop.additional.preferences";
 const IN_PROGRESS_JOB_STORAGE_KEY = "crop.additional.inProgressJobId";
-const SESSION_EXPIRED_MESSAGE =
-  "Session expired before the crop completed. Refresh the app and try again.";
+const AUTH_ISSUE_MESSAGE =
+  "Authentication expired or access is denied. Refresh the app and try again.";
+const AUTH_REDIRECT_MESSAGE =
+  "Request was redirected to a login page. Verify your app/auth URL configuration and try again.";
+const SERVER_ERROR_MESSAGE =
+  "The server encountered an error while processing your crop request. Please try again shortly.";
 const PRESET_ASPECT_RATIO_HINTS = {
   portrait: 4 / 5,
   square: 1,
@@ -259,6 +263,68 @@ function normalizeFilters(rawValue) {
   }
 
   return { value, normalizedFilters, error: null };
+}
+
+async function buildResponseDiagnostics(response) {
+  const contentType = response.headers.get("content-type") || "";
+  let textSnippet = "";
+
+  try {
+    const text = await response.clone().text();
+    textSnippet = text.replace(/\s+/g, " ").trim().slice(0, 240);
+  } catch {
+    textSnippet = "";
+  }
+
+  return {
+    status: response.status,
+    redirected: response.redirected,
+    url: response.url,
+    contentType,
+    textSnippet,
+  };
+}
+
+function isLikelyAuthRedirect(diagnostics) {
+  if (!diagnostics) {
+    return false;
+  }
+
+  const lowerContentType = diagnostics.contentType.toLowerCase();
+  const lowerUrl = String(diagnostics.url || "").toLowerCase();
+  const lowerSnippet = String(diagnostics.textSnippet || "").toLowerCase();
+  const hasLoginSignal =
+    lowerUrl.includes("/login") ||
+    lowerUrl.includes("/auth") ||
+    lowerSnippet.includes("login") ||
+    lowerSnippet.includes("sign in") ||
+    lowerSnippet.includes("shopify");
+
+  return (
+    (diagnostics.status === 302 || diagnostics.redirected) &&
+    lowerContentType.includes("text/html") &&
+    hasLoginSignal
+  );
+}
+
+function getResponseErrorMessage(diagnostics) {
+  if (!diagnostics) {
+    return "Unexpected response from the server. Please retry.";
+  }
+
+  if (diagnostics.status === 401 || diagnostics.status === 403) {
+    return AUTH_ISSUE_MESSAGE;
+  }
+
+  if (isLikelyAuthRedirect(diagnostics)) {
+    return AUTH_REDIRECT_MESSAGE;
+  }
+
+  if (diagnostics.status >= 500) {
+    return SERVER_ERROR_MESSAGE;
+  }
+
+  return `Request failed (${diagnostics.status}). Please retry.`;
 }
 
 function buildAllowedEmbedQueryString(search) {
@@ -947,26 +1013,29 @@ export default function CropImagePage() {
             Authorization: `Bearer ${idToken}`,
           },
         });
+        const statusDiagnostics = await buildResponseDiagnostics(statusResponse);
 
-        if (statusResponse.status === 401) {
-          setPendingJobId(jobId);
-          throw new Error(SESSION_EXPIRED_MESSAGE);
-        }
-
-        if (statusResponse.status === 404) {
+        if (statusDiagnostics.status === 404) {
           clearPendingJobId();
           throw new Error(
             "Your crop job could not be found. Something went wrong—please retry.",
           );
         }
 
-        if (!statusResponse.ok) {
-          throw new Error(`Status request failed (${statusResponse.status}).`);
-        }
+        if (
+          !statusResponse.ok ||
+          !statusDiagnostics.contentType.includes("application/json")
+        ) {
+          if (statusDiagnostics.status === 401 || statusDiagnostics.status === 403) {
+            setPendingJobId(jobId);
+          }
 
-        const statusContentType = statusResponse.headers.get("content-type") || "";
-        if (!statusContentType.includes("application/json")) {
-          throw new Error(`Expected JSON status response but received ${statusContentType}.`);
+          console.warn("Unexpected crop status response", {
+            jobId,
+            diagnostics: statusDiagnostics,
+          });
+
+          throw new Error(getResponseErrorMessage(statusDiagnostics));
         }
 
         jobStatus = await statusResponse.json();
@@ -1628,7 +1697,8 @@ export default function CropImagePage() {
         },
       });
 
-      const contentType = response.headers.get("content-type") || "";
+      const responseDiagnostics = await buildResponseDiagnostics(response);
+      const { contentType } = responseDiagnostics;
       let responsePayload = null;
 
       if (contentType.includes("application/json")) {
@@ -1639,16 +1709,12 @@ export default function CropImagePage() {
         }
       }
 
-      if (!response.ok) {
-        throw new Error(`Crop request failed (${response.status}).`);
-      }
-
-      if (contentType.includes("text/html")) {
-        throw new Error(SESSION_EXPIRED_MESSAGE);
-      }
-
-      if (!contentType.includes("application/json")) {
-        throw new Error(`Expected JSON response but received ${contentType}.`);
+      if (!response.ok || !contentType.includes("application/json")) {
+        console.warn("Unexpected crop submit response", {
+          requestUrl,
+          diagnostics: responseDiagnostics,
+        });
+        throw new Error(getResponseErrorMessage(responseDiagnostics));
       }
 
       if (!responsePayload?.jobId) {
