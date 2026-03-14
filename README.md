@@ -144,6 +144,21 @@ Set `SHOPIFY_BILLING_TEST_MODE` per environment so Shopify billing behaves corre
 - **Production:** `SHOPIFY_BILLING_TEST_MODE=false` (real charges)
 - **Development/Staging:** `SHOPIFY_BILLING_TEST_MODE=true` (test charges)
 
+### Shopify app URL parity (first-line session troubleshooting)
+
+If merchants immediately see **session-expired** toasts right after install/auth, first verify URL parity between runtime env and Shopify Partners config:
+
+- `SHOPIFY_APP_URL` must be set.
+- In production (`NODE_ENV=production`), `SHOPIFY_APP_URL` must be `https://...`.
+- `SHOPIFY_APP_URL` origin must match `shopify.app.toml` `application_url` origin exactly (same scheme + host + port).
+
+Example parity check:
+
+- `SHOPIFY_APP_URL=https://smart-crop-app.onrender.com`
+- `shopify.app.toml` -> `application_url = "https://smart-crop-app.onrender.com"`
+
+The server now validates this at startup and logs a clear mismatch message because this is a common root cause of immediate session-expired loops after OAuth.
+
 ### 3) Render deployment baseline
 
 A `render.yaml` is included to provision:
