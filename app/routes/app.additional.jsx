@@ -5,11 +5,10 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import { PLAN_CONFIG, buildPlanView } from "../utils/plan.js";
 import {
-  commitPlanUsage,
   getShopPlanUsage,
   reservePlanCapacity,
 } from "../utils/plan.server.js";
-import { cropImages } from "../utils/smartCropClient";
+import { createCropJob } from "../utils/cropJobs.server.js";
 import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
 import {
@@ -758,49 +757,18 @@ export const action = async ({ request }) => {
     return jsonError(planReservation.error, 403, { plan: planReservation.plan });
   }
 
-  try {
-    const response = await cropImages(files, {
+  const jobId = createCropJob({
+    shop: session.shop,
+    files,
+    startedAt,
+    options: {
       method: planReservation.effectiveMethod,
       pipeline,
       ...optionPayload.options,
-    });
-    const elapsedMs = Date.now() - startedAt;
+    },
+  });
 
-    const payload = await response.json();
-    if (!payload?.downloadUrl) {
-      return jsonError("Crop API response is missing downloadUrl.", 502);
-    }
-
-    await commitPlanUsage({
-      shop: session.shop,
-      imageCount: files.length,
-    });
-
-    return Response.json({
-      downloadUrl: payload.downloadUrl,
-      filename: payload.filename || "cropped_batch.zip",
-      expiresIn: payload.expiresIn || 600,
-      cropSummary: {
-        requestedCount: files.length,
-        successCount: files.length,
-        failedCount: 0,
-        failedFiles: [],
-        elapsedSeconds: Number((elapsedMs / 1000).toFixed(2)),
-      },
-    });
-  } catch (error) {
-    console.error("Crop action failed", {
-      error: error instanceof Error ? error.message : error,
-      fileCount: files.length,
-      method: planReservation.effectiveMethod,
-    });
-    return jsonError(
-      error instanceof Error
-        ? error.message
-        : "Unable to crop image. Check the FastAPI service.",
-      502,
-    );
-  }
+  return Response.json({ jobId }, { status: 202 });
 };
 
 export default function CropImagePage() {
@@ -1498,18 +1466,51 @@ export default function CropImagePage() {
         throw new Error(`Expected JSON response but received ${contentType}.`);
       }
 
-      if (!responsePayload?.downloadUrl) {
-        throw new Error("Missing download URL from crop response.");
+      if (!responsePayload?.jobId) {
+        throw new Error("Missing job ID from crop response.");
+      }
+
+      const statusUrl = `${window.location.pathname.replace(/\/$/, "")}/status/${responsePayload.jobId}${window.location.search}`;
+
+      let jobStatus = null;
+      let isDone = false;
+
+      while (!isDone) {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+
+        const statusResponse = await fetch(statusUrl, {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+          },
+        });
+
+        if (!statusResponse.ok) {
+          throw new Error(`Status request failed (${statusResponse.status}).`);
+        }
+
+        const statusContentType = statusResponse.headers.get("content-type") || "";
+        if (!statusContentType.includes("application/json")) {
+          throw new Error(`Expected JSON status response but received ${statusContentType}.`);
+        }
+
+        jobStatus = await statusResponse.json();
+        isDone = jobStatus?.status === "done";
+      }
+
+      if (!jobStatus?.downloadUrl) {
+        throw new Error(jobStatus?.error || "Crop finished without a download URL.");
       }
 
       setDownloadLink({
-        url: responsePayload.downloadUrl,
-        filename: responsePayload.filename || "cropped_batch.zip",
-        expiresIn: responsePayload.expiresIn || 600,
+        url: jobStatus.downloadUrl,
+        filename: jobStatus.filename || "cropped_batch.zip",
+        expiresIn: jobStatus.expiresIn || 600,
       });
-      setDownloadResult(responsePayload.cropSummary || null);
+      setDownloadResult(jobStatus.cropSummary || null);
       setIsReadyToDownload(true);
 
+      window.open(jobStatus.downloadUrl, "_blank", "noopener,noreferrer");
       showToast("Crop completed. Your ZIP is ready to download.");
     } catch (error) {
       showToast(
