@@ -181,7 +181,7 @@ This guarantees migrations are applied before serving traffic.
 >
 > `SMARTCROP_API_TOKEN` must match across both services. FastAPI rejects missing tokens with `401` and invalid tokens with `403` on `/crop` and `/crop/batch`.
 >
-> For batch ZIP downloads via Cloudflare R2, set `R2_ACCOUNT_ID`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET` on the FastAPI service, and add an R2 lifecycle rule for prefix `smartcrop/batch/` with 1-day expiration.
+> Batch ZIP downloads are now served directly by FastAPI from temporary storage under `/tmp`, with expiring local download URLs and no external object storage configuration required.
 
 ### Smart Crop shared-secret rotation and rollback
 
@@ -421,7 +421,7 @@ If so, please update [.graphqlrc.ts](https://github.com/Shopify/shopify-app-temp
 
 ### Using Defer & await for streaming responses
 
-By default the CLI uses a cloudflare tunnel. Unfortunately  cloudflare tunnels wait for the Response stream to finish, then sends one chunk.  This will not affect production.
+By default the CLI may use a tunnel provider that can buffer streamed responses during local development. This does not affect production.
 
 To test [streaming using await](https://reactrouter.com/api/components/Await#await) during local development we recommend [localhost based development](https://shopify.dev/docs/apps/build/cli-for-apps/networking-options#localhost-based-development).
 
