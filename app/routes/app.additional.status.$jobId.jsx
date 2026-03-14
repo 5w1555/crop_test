@@ -18,6 +18,13 @@ export const loader = async ({ request, params }) => {
     return Response.json({ status: "pending" });
   }
 
+  if (job.status === "error") {
+    return Response.json({
+      status: "error",
+      error: job.error || "Unable to crop image. Please retry.",
+    });
+  }
+
   return Response.json({
     status: "done",
     downloadUrl: job.downloadUrl || undefined,
