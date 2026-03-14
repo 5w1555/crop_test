@@ -347,7 +347,7 @@ def test_run_crop_pipeline_raises_runtime_error_when_crop_method_returns_none(mo
         fastapi_main_module.run_crop_pipeline("tmp.jpg", "profile", fastapi_main_module.CropOptions())
 
 
-def test_crop_batch_endpoint_returns_presigned_download_payload(monkeypatch, fastapi_main_module):
+def test_crop_batch_endpoint_returns_local_download_payload(monkeypatch, fastapi_main_module):
     import asyncio
     import io
 
@@ -362,8 +362,8 @@ def test_crop_batch_endpoint_returns_presigned_download_payload(monkeypatch, fas
     monkeypatch.setattr(fastapi_main_module, "image_to_buffer", lambda *args, **kwargs: io.BytesIO(b"png-bytes"))
     monkeypatch.setattr(
         fastapi_main_module,
-        "_upload_batch_zip_to_r2",
-        lambda zip_bytes, filename, expires_in: "https://example.r2/presigned.zip",
+        "_register_download",
+        lambda zip_bytes, filename: "download-token",
     )
 
     upload = UploadFile(
@@ -389,7 +389,7 @@ def test_crop_batch_endpoint_returns_presigned_download_payload(monkeypatch, fas
     )
 
     assert response == {
-        "downloadUrl": "https://example.r2/presigned.zip",
+        "downloadUrl": "/downloads/download-token",
         "filename": "cropped_batch.zip",
         "expiresIn": 600,
     }

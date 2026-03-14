@@ -7,6 +7,7 @@ import logging
 import secrets
 import zipfile
 import mimetypes
+import time
 import threading
 import queue
 import concurrent.futures
@@ -1599,7 +1600,7 @@ def main():
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
 from fastapi.params import Form as FormField
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, FileResponse
 import tempfile
 
 app = FastAPI(title="smart-crop API")
@@ -1695,7 +1696,11 @@ CROP_CONCURRENCY = _parse_env_int("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv(
 SLOT_ACQUIRE_TIMEOUT_SECONDS = _parse_env_float("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20", min_value=0.5, max_value=300)
 PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true", "yes", "on"}
 SMARTCROP_API_TOKEN = os.getenv("SMARTCROP_API_TOKEN")
-R2_PRESIGNED_EXPIRY_SECONDS = 600
+DOWNLOAD_TTL_SECONDS = _parse_env_int("SMARTCROP_DOWNLOAD_TTL_SECONDS", "600", min_value=60, max_value=86400)
+DOWNLOAD_TMP_DIR = Path("/tmp/smartcrop-downloads")
+
+_download_registry: dict[str, dict[str, str | float]] = {}
+_download_registry_lock = threading.Lock()
 
 _crop_request_semaphore = asyncio.Semaphore(CROP_CONCURRENCY)
 
@@ -1752,6 +1757,43 @@ def require_smartcrop_token(
 
     if not secrets.compare_digest(x_smartcrop_token, SMARTCROP_API_TOKEN):
         raise HTTPException(status_code=403, detail="Invalid X-SmartCrop-Token")
+
+
+def _register_download(zip_bytes: bytes, filename: str) -> str:
+    DOWNLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(24)
+    stored_filename = f"{token}-{filename}"
+    stored_path = DOWNLOAD_TMP_DIR / stored_filename
+    stored_path.write_bytes(zip_bytes)
+
+    expires_at = time.time() + DOWNLOAD_TTL_SECONDS
+    with _download_registry_lock:
+        _download_registry[token] = {
+            "path": str(stored_path),
+            "filename": filename,
+            "expires_at": expires_at,
+        }
+
+    return token
+
+
+def _cleanup_expired_downloads() -> None:
+    now = time.time()
+    expired_tokens: list[str] = []
+
+    with _download_registry_lock:
+        for token, metadata in _download_registry.items():
+            if float(metadata["expires_at"]) <= now:
+                expired_tokens.append(token)
+
+        for token in expired_tokens:
+            metadata = _download_registry.pop(token, None)
+            if not metadata:
+                continue
+            try:
+                Path(str(metadata["path"])).unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 @asynccontextmanager
@@ -1938,65 +1980,6 @@ def run_crop_pipeline(
         raise RuntimeError("Cropping failed")
 
     return apply_crop_postprocessing(cropped, crop_options)
-
-
-def _get_r2_client_config():
-    required_env = {
-        "R2_ACCOUNT_ID": os.getenv("R2_ACCOUNT_ID"),
-        "R2_ACCESS_KEY_ID": os.getenv("R2_ACCESS_KEY_ID"),
-        "R2_SECRET_ACCESS_KEY": os.getenv("R2_SECRET_ACCESS_KEY"),
-        "R2_BUCKET": os.getenv("R2_BUCKET"),
-    }
-    missing = [name for name, value in required_env.items() if not value]
-    if missing:
-        raise RuntimeError(
-            "Missing required R2 environment variables: "
-            + ", ".join(sorted(missing))
-        )
-
-    return {
-        "account_id": required_env["R2_ACCOUNT_ID"],
-        "access_key_id": required_env["R2_ACCESS_KEY_ID"],
-        "secret_access_key": required_env["R2_SECRET_ACCESS_KEY"],
-        "bucket": required_env["R2_BUCKET"],
-    }
-
-
-def _upload_batch_zip_to_r2(zip_bytes: bytes, filename: str, expires_in: int):
-    import boto3
-
-    config = _get_r2_client_config()
-    endpoint_url = f"https://{config['account_id']}.r2.cloudflarestorage.com"
-    object_key = f"smartcrop/batch/{secrets.token_urlsafe(16)}-{filename}"
-
-    s3_client = boto3.client(
-        "s3",
-        endpoint_url=endpoint_url,
-        aws_access_key_id=config["access_key_id"],
-        aws_secret_access_key=config["secret_access_key"],
-        region_name="auto",
-    )
-
-    content_disposition = f'attachment; filename="{filename}"'
-    s3_client.put_object(
-        Bucket=config["bucket"],
-        Key=object_key,
-        Body=zip_bytes,
-        ContentType="application/zip",
-        ContentDisposition=content_disposition,
-    )
-
-    presigned_url = s3_client.generate_presigned_url(
-        "get_object",
-        Params={
-            "Bucket": config["bucket"],
-            "Key": object_key,
-            "ResponseContentType": "application/zip",
-            "ResponseContentDisposition": content_disposition,
-        },
-        ExpiresIn=expires_in,
-    )
-    return presigned_url
 
 
 @dataclass
@@ -2390,6 +2373,29 @@ def image_to_buffer(image, output_format: str):
     return image_buf
 
 
+@app.get("/downloads/{download_token}")
+async def download_batch_zip(download_token: str):
+    _cleanup_expired_downloads()
+
+    with _download_registry_lock:
+        metadata = _download_registry.get(download_token)
+
+    if not metadata:
+        raise HTTPException(status_code=404, detail="Download not found or expired")
+
+    file_path = Path(str(metadata["path"]))
+    if not file_path.exists():
+        with _download_registry_lock:
+            _download_registry.pop(download_token, None)
+        raise HTTPException(status_code=404, detail="Download not found or expired")
+
+    return FileResponse(
+        path=str(file_path),
+        media_type="application/zip",
+        filename=str(metadata["filename"]),
+    )
+
+
 @app.post("/crop/batch")
 async def crop_batch_endpoint(
     files: list[UploadFile] | None = File(default=None),
@@ -2504,23 +2510,16 @@ async def crop_batch_endpoint(
             )
 
         zip_bytes = zip_buffer.getvalue()
-
-        try:
-            presigned_url = await asyncio.to_thread(
-                _upload_batch_zip_to_r2,
-                zip_bytes,
-                "cropped_batch.zip",
-                R2_PRESIGNED_EXPIRY_SECONDS,
-            )
-        except RuntimeError as exc:
-            raise HTTPException(status_code=500, detail=str(exc)) from exc
-        except Exception as exc:
-            raise HTTPException(status_code=502, detail=f"Unable to upload ZIP to R2: {exc}") from exc
+        download_token = await asyncio.to_thread(
+            _register_download,
+            zip_bytes,
+            "cropped_batch.zip",
+        )
 
         return {
-            "downloadUrl": _build_download_url(presigned_url),
+            "downloadUrl": _build_download_url(f"/downloads/{download_token}"),
             "filename": "cropped_batch.zip",
-            "expiresIn": R2_PRESIGNED_EXPIRY_SECONDS,
+            "expiresIn": DOWNLOAD_TTL_SECONDS,
         }
     except Exception as e:
         import traceback
