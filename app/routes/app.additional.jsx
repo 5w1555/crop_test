@@ -285,6 +285,23 @@ async function buildResponseDiagnostics(response) {
   };
 }
 
+async function readJsonPayload(response, diagnostics = null) {
+  try {
+    return await response.json();
+  } catch {
+    const fallbackText = String(diagnostics?.textSnippet || "").trim();
+    if (!fallbackText) {
+      return null;
+    }
+
+    try {
+      return JSON.parse(fallbackText);
+    } catch {
+      return null;
+    }
+  }
+}
+
 function isLikelyAuthRedirect(diagnostics) {
   if (!diagnostics) {
     return false;
@@ -1022,10 +1039,7 @@ export default function CropImagePage() {
           );
         }
 
-        if (
-          !statusResponse.ok ||
-          !statusDiagnostics.contentType.includes("application/json")
-        ) {
+        if (!statusResponse.ok) {
           if (statusDiagnostics.status === 401 || statusDiagnostics.status === 403) {
             setPendingJobId(jobId);
           }
@@ -1038,7 +1052,10 @@ export default function CropImagePage() {
           throw new Error(getResponseErrorMessage(statusDiagnostics));
         }
 
-        jobStatus = await statusResponse.json();
+        jobStatus = await readJsonPayload(statusResponse, statusDiagnostics);
+        if (!jobStatus || typeof jobStatus !== "object") {
+          throw new Error("Unexpected status response from the server. Please retry.");
+        }
         isDone = jobStatus?.status === "done" || jobStatus?.status === "error";
 
         if (!isDone) {
@@ -1698,23 +1715,21 @@ export default function CropImagePage() {
       });
 
       const responseDiagnostics = await buildResponseDiagnostics(response);
-      const { contentType } = responseDiagnostics;
       let responsePayload = null;
 
-      if (contentType.includes("application/json")) {
-        responsePayload = await response.json();
-        if (typeof responsePayload?.error === "string" && responsePayload.error) {
-          showToast(responsePayload.error, { isError: true });
-          return;
-        }
-      }
-
-      if (!response.ok || !contentType.includes("application/json")) {
+      if (!response.ok) {
         console.warn("Unexpected crop submit response", {
           requestUrl,
           diagnostics: responseDiagnostics,
         });
         throw new Error(getResponseErrorMessage(responseDiagnostics));
+      }
+
+      responsePayload = await readJsonPayload(response, responseDiagnostics);
+
+      if (typeof responsePayload?.error === "string" && responsePayload.error) {
+        showToast(responsePayload.error, { isError: true });
+        return;
       }
 
       if (!responsePayload?.jobId) {
