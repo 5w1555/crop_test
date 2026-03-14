@@ -310,17 +310,25 @@ function isLikelyAuthRedirect(diagnostics) {
   const lowerContentType = diagnostics.contentType.toLowerCase();
   const lowerUrl = String(diagnostics.url || "").toLowerCase();
   const lowerSnippet = String(diagnostics.textSnippet || "").toLowerCase();
-  const hasLoginSignal =
-    lowerUrl.includes("/login") ||
-    lowerUrl.includes("/auth") ||
-    lowerSnippet.includes("login") ||
-    lowerSnippet.includes("sign in") ||
-    lowerSnippet.includes("shopify");
+  const isRedirectStatus = [301, 302, 303, 307, 308].includes(
+    diagnostics.status,
+  );
+  const hasAuthPathSignal =
+    lowerUrl.includes("/login") || lowerUrl.includes("/auth");
+  const hasLoginFormSignal =
+    lowerSnippet.includes("<form") &&
+    (lowerSnippet.includes("type=\"password\"") ||
+      lowerSnippet.includes("type='password'") ||
+      lowerSnippet.includes("name=\"password\"") ||
+      lowerSnippet.includes("name='password'") ||
+      lowerSnippet.includes("sign in") ||
+      lowerSnippet.includes("log in") ||
+      lowerSnippet.includes("login"));
 
   return (
-    (diagnostics.status === 302 || diagnostics.redirected) &&
+    (isRedirectStatus || diagnostics.redirected) &&
     lowerContentType.includes("text/html") &&
-    hasLoginSignal
+    (hasAuthPathSignal || hasLoginFormSignal)
   );
 }
 
@@ -332,18 +340,32 @@ function isLikelyAuthDocument(diagnostics) {
   const lowerContentType = diagnostics.contentType.toLowerCase();
   const lowerUrl = String(diagnostics.url || "").toLowerCase();
   const lowerSnippet = String(diagnostics.textSnippet || "").toLowerCase();
+  const hasAuthPathSignal =
+    lowerUrl.includes("/login") || lowerUrl.includes("/auth");
+  const hasLoginFormSignal =
+    lowerSnippet.includes("<form") &&
+    (lowerSnippet.includes("type=\"password\"") ||
+      lowerSnippet.includes("type='password'") ||
+      lowerSnippet.includes("name=\"password\"") ||
+      lowerSnippet.includes("name='password'") ||
+      lowerSnippet.includes("sign in") ||
+      lowerSnippet.includes("log in") ||
+      lowerSnippet.includes("login"));
+  const isAuthStatus = diagnostics.status === 401 || diagnostics.status === 403;
 
   if (!lowerContentType.includes("text/html")) {
     return false;
   }
 
-  return (
-    lowerUrl.includes("/login") ||
-    lowerUrl.includes("/auth") ||
-    lowerSnippet.includes("login") ||
-    lowerSnippet.includes("sign in") ||
-    lowerSnippet.includes("shopify")
-  );
+  if (isAuthStatus && (hasAuthPathSignal || hasLoginFormSignal)) {
+    return true;
+  }
+
+  if (hasAuthPathSignal && hasLoginFormSignal) {
+    return true;
+  }
+
+  return false;
 }
 
 function getResponseErrorMessage(diagnostics) {
@@ -373,6 +395,10 @@ function getResponseErrorMessage(diagnostics) {
 function getUnexpectedResponseMessage(diagnostics) {
   if (!diagnostics) {
     return "Unexpected response from the server. Please retry.";
+  }
+
+  if (diagnostics.status === 401 || diagnostics.status === 403) {
+    return AUTH_ISSUE_MESSAGE;
   }
 
   if (isLikelyAuthRedirect(diagnostics) || isLikelyAuthDocument(diagnostics)) {
