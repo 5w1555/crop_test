@@ -163,7 +163,6 @@ const CROP_RESIZE_HANDLES = [
   "se",
 ];
 const STABLE_EMBED_QUERY_PARAM_KEYS = ["shop", "host", "embedded"];
-const CROP_SUBMIT_PATH = "/app/additional";
 const CROP_STATUS_BASE_PATH = "/app/additional";
 
 function clamp(value, min, max) {
@@ -1026,9 +1025,12 @@ export const loader = async ({ request }) => {
     }),
   );
 
+  const appOrigin = new URL(request.url).origin;
+
   return {
     planUsage,
     hasActiveProPlan: billingState.hasActivePayment,
+    appOrigin,
   };
 };
 
@@ -1087,7 +1089,7 @@ export const action = async ({ request }) => {
 };
 
 export default function CropImagePage() {
-  const { planUsage, hasActiveProPlan } = useLoaderData();
+  const { planUsage, hasActiveProPlan, appOrigin } = useLoaderData();
   const shopify = useAppBridge();
 
   const inputRef = useRef(null);
@@ -1885,7 +1887,7 @@ export default function CropImagePage() {
       return;
     }
 
-    const statusRequestPath = resolveCropRequestBasePath(form.action);
+    const statusRequestPath = `${appOrigin}/app/additional`;
 
     if (!hasValidSelection) {
       if (fileError) {
@@ -1944,7 +1946,7 @@ export default function CropImagePage() {
       }
 
       const idToken = await shopify.idToken();
-      const requestUrl = `${CROP_SUBMIT_PATH}${buildEmbeddedRequestQueryString(
+      const requestUrl = `${appOrigin}/app/additional${buildEmbeddedRequestQueryString(
         typeof window === "undefined" ? "" : window.location.search,
         idToken,
       )}`;
