@@ -161,6 +161,8 @@ const CROP_RESIZE_HANDLES = [
   "se",
 ];
 const STABLE_EMBED_QUERY_PARAM_KEYS = ["shop", "host", "embedded"];
+const CROP_SUBMIT_PATH = "/api/crop";
+const CROP_STATUS_BASE_PATH = "/app/additional";
 
 function clamp(value, min, max) {
   if (!Number.isFinite(value)) {
@@ -528,14 +530,14 @@ function buildEmbeddedRequestQueryString(search, sessionToken = "") {
 
 function resolveCropRequestBasePath(formAction = "") {
   if (typeof window === "undefined") {
-    return formAction || "/app/additional";
+    return formAction || CROP_STATUS_BASE_PATH;
   }
 
-  const resolvedAction = formAction || window.location.pathname || "/app/additional";
+  const resolvedAction = formAction || window.location.pathname || CROP_STATUS_BASE_PATH;
   const url = new URL(resolvedAction, window.location.origin);
 
   if (!url.pathname || url.pathname === "/") {
-    return "/app/additional";
+    return CROP_STATUS_BASE_PATH;
   }
 
   return url.pathname;
@@ -1854,7 +1856,7 @@ export default function CropImagePage() {
       return;
     }
 
-    const requestPath = resolveCropRequestBasePath(form.action);
+    const statusRequestPath = resolveCropRequestBasePath(form.action);
 
     if (!hasValidSelection) {
       if (fileError) {
@@ -1913,7 +1915,7 @@ export default function CropImagePage() {
       }
 
       const idToken = await shopify.idToken();
-      const requestUrl = `${requestPath}${buildEmbeddedRequestQueryString(
+      const requestUrl = `${CROP_SUBMIT_PATH}${buildEmbeddedRequestQueryString(
         typeof window === "undefined" ? "" : window.location.search,
         idToken,
       )}`;
@@ -1979,7 +1981,7 @@ export default function CropImagePage() {
       setPendingJobId(responseJobId);
       const jobStatus = await pollCropJobStatus(
         responseJobId,
-        requestPath,
+        statusRequestPath,
         correlationId,
       );
 
