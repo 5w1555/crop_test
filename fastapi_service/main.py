@@ -3,6 +3,7 @@ import io
 import math
 import asyncio
 import json
+import base64
 import logging
 import secrets
 import zipfile
@@ -1597,10 +1598,10 @@ def main():
     else:
         print("Failed to save cropped image.")
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Header, Depends, Request
 from fastapi.params import Form as FormField
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, FileResponse
+from fastapi.responses import StreamingResponse, FileResponse, JSONResponse
 import tempfile
 
 app = FastAPI(title="smart-crop API")
@@ -1759,6 +1760,76 @@ def require_smartcrop_token(
         raise HTTPException(status_code=403, detail="Invalid X-SmartCrop-Token")
 
 
+def build_canonical_crop_response(
+    *,
+    status: str,
+    job_id: str | None = None,
+    media_updates: list[dict] | None = None,
+    summary: dict | None = None,
+    errors: list[dict] | None = None,
+):
+    return {
+        "status": status,
+        "jobId": job_id,
+        "mediaUpdates": media_updates or [],
+        "summary": summary or {
+            "requestedCount": 0,
+            "successCount": 0,
+            "failedCount": 0,
+            "failedFiles": [],
+        },
+        "errors": errors or [],
+    }
+
+
+def _coerce_error_list(detail, *, code: str):
+    if isinstance(detail, list):
+        errors = []
+        for item in detail:
+            if isinstance(item, dict):
+                message = str(item.get("msg") or item.get("message") or item.get("detail") or "Request validation failed")
+                source = item.get("loc")
+                source_path = ".".join(str(part) for part in source) if isinstance(source, (list, tuple)) else None
+                errors.append({"code": code, "message": message, **({"source": source_path} if source_path else {})})
+            else:
+                errors.append({"code": code, "message": str(item)})
+        return errors
+
+    if isinstance(detail, dict):
+        message = str(detail.get("message") or detail.get("detail") or "Request failed")
+        return [{"code": code, "message": message}]
+
+    return [{"code": code, "message": str(detail)}]
+
+
+@app.exception_handler(HTTPException)
+async def canonical_http_exception_handler(request: Request, exc: HTTPException):
+    errors = _coerce_error_list(exc.detail, code="request_error")
+    status = "failed"
+    if exc.status_code in (401, 403):
+        status = "failed"
+        for item in errors:
+            item["code"] = "auth_error"
+    elif exc.status_code == 422:
+        status = "failed"
+        for item in errors:
+            item["code"] = "validation_error"
+
+    payload = build_canonical_crop_response(status=status, errors=errors)
+    return JSONResponse(status_code=exc.status_code, content=payload)
+
+
+from fastapi.exceptions import RequestValidationError
+
+
+@app.exception_handler(RequestValidationError)
+async def canonical_validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = _coerce_error_list(exc.errors(), code="validation_error")
+    payload = build_canonical_crop_response(status="failed", errors=errors)
+    return JSONResponse(status_code=422, content=payload)
+
+
+
 def _register_download(zip_bytes: bytes, filename: str) -> str:
     DOWNLOAD_TMP_DIR.mkdir(parents=True, exist_ok=True)
     token = secrets.token_urlsafe(24)
@@ -1864,12 +1935,7 @@ async def crop_endpoint(
     filters: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
-    """
-    Upload an image and return a cropped image.
-    `pipeline` can be: auto (default), face, salience, heuristic
-    `method` can be: auto (default), head_bust, frontal, profile, chin, nose, below_lips, center_content
-    """
-    suffix = os.path.splitext(file.filename)[1] or ".jpg"
+    suffix = os.path.splitext(file.filename or "")[1] or ".jpg"
     tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
     crop_options = parse_crop_options(
         target_aspect_ratio=target_aspect_ratio,
@@ -1881,21 +1947,58 @@ async def crop_endpoint(
         crop_coordinates=crop_coordinates,
         filters=filters,
     )
+
+    source_name = file.filename or "upload"
+
     try:
-        await _stream_upload_to_temp_file(file, tmp, file.filename or "upload")
+        total_bytes = await _stream_upload_to_temp_file(file, tmp, source_name)
         tmp.close()
+
+        if total_bytes == 0:
+            raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
         async with crop_request_slot():
             cropped = run_crop_pipeline(tmp.name, method, crop_options, pipeline=pipeline)
             output_info = resolve_output_format(file.filename, file.content_type)
-            buf = image_to_buffer(cropped, output_info['pil_format'])
-            headers = {
-                "Content-Disposition": f'attachment; filename="{Path(file.filename or "cropped").stem}_cropped.{output_info["extension"]}"'
-            }
-            return StreamingResponse(buf, media_type=output_info['media_type'], headers=headers)
+            output_stem = Path(source_name).stem or "image-1"
+            output_filename = f"{output_stem}_cropped.{output_info['extension']}"
+            output_buffer = image_to_buffer(cropped, output_info["pil_format"])
+            try:
+                output_binary = output_buffer.getvalue()
+                output_bytes = len(output_binary)
+            finally:
+                output_buffer.close()
+
+        media_update = {
+            "mediaId": None,
+            "sourceMediaId": None,
+            "destinationMediaId": None,
+            "status": "updated",
+            "updatedImageUrl": None,
+            "adminTargetUrl": None,
+            "sourceFilename": source_name,
+            "outputFilename": output_filename,
+            "contentType": output_info["media_type"],
+            "bytes": output_bytes,
+            "croppedBase64": f"data:{output_info['media_type']};base64,{base64.b64encode(output_binary).decode('ascii')}",
+            "idempotencyKey": None,
+            "mutationOutcome": "single_crop",
+            "error": None,
+        }
+
+        return build_canonical_crop_response(
+            status="succeeded",
+            media_updates=[media_update],
+            summary={
+                "requestedCount": 1,
+                "successCount": 1,
+                "failedCount": 0,
+                "failedFiles": [],
+            },
+            errors=[],
+        )
     except RuntimeError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
-
     finally:
         try:
             os.unlink(tmp.name)
@@ -2412,123 +2515,133 @@ async def crop_batch_endpoint(
     filters: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
-    """
-    Upload multiple images and return a ZIP containing cropped outputs in original formats.
-    Invalid files are skipped and recorded in manifest.json inside the ZIP.
-    """
-    try:
-        uploaded_files = files or file or []
+    uploaded_files = files or file or []
 
-        if not uploaded_files:
-            raise HTTPException(status_code=400, detail="No files uploaded")
+    if not uploaded_files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
 
-        if len(uploaded_files) > MAX_BATCH_FILES:
-            raise HTTPException(
-                status_code=413,
-                detail=f"Too many files. Max {MAX_BATCH_FILES} files per batch request.",
-            )
-
-        zip_buffer = io.BytesIO()
-        manifest = {"pipeline": _normalize_pipeline(pipeline), "method": method, "processed": [], "failed": []}
-        crop_options = parse_crop_options(
-            target_aspect_ratio=target_aspect_ratio,
-            margin_top=margin_top,
-            margin_right=margin_right,
-            margin_bottom=margin_bottom,
-            margin_left=margin_left,
-            anchor_hint=anchor_hint,
-            crop_coordinates=crop_coordinates,
-            filters=filters,
-        )
-        used_output_names = {}
-
-        with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zip_file:
-            for index, uploaded_file in enumerate(uploaded_files, start=1):
-                suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
-                tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
-                input_name = uploaded_file.filename or f"image_{index}{suffix}"
-
-                try:
-                    total_bytes = await _stream_upload_to_temp_file(uploaded_file, tmp, input_name)
-                    tmp.close()
-
-                    if total_bytes == 0:
-                        raise ValueError("Uploaded file is empty")
-
-                    async with crop_request_slot():
-                        cropped = run_crop_pipeline(tmp.name, method, crop_options, pipeline=pipeline)
-
-                    output_info = resolve_output_format(input_name, uploaded_file.content_type)
-                    output_stem = Path(input_name).stem or f"image_{index}"
-                    base_output_name = f"{output_stem}_cropped"
-                    name_count = used_output_names.get(base_output_name, 0)
-                    used_output_names[base_output_name] = name_count + 1
-                    suffix_name = f"_{name_count}" if name_count else ""
-                    output_filename = f"{base_output_name}{suffix_name}.{output_info['extension']}"
-
-                    output_buffer = image_to_buffer(cropped, output_info['pil_format'])
-                    try:
-                        zip_file.writestr(output_filename, output_buffer.getbuffer())
-                    finally:
-                        output_buffer.close()
-
-                    manifest["processed"].append(
-                        {
-                            "input": input_name,
-                            "output": output_filename,
-                        }
-                    )
-                except HTTPException as exc:
-                    manifest["failed"].append(
-                        {
-                            "input": input_name,
-                            "error": str(exc.detail),
-                        }
-                    )
-                except Exception as exc:
-                    manifest["failed"].append(
-                        {
-                            "input": input_name,
-                            "error": str(exc),
-                        }
-                    )
-                finally:
-                    try:
-                        os.unlink(tmp.name)
-                    except Exception:
-                        pass
-
-            zip_file.writestr("manifest.json", json.dumps(manifest, indent=2))
-
-        if not manifest["processed"]:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "message": "No files were successfully cropped",
-                    "failed": manifest["failed"],
-                },
-            )
-
-        zip_bytes = zip_buffer.getvalue()
-        download_token = await asyncio.to_thread(
-            _register_download,
-            zip_bytes,
-            "cropped_batch.zip",
+    if len(uploaded_files) > MAX_BATCH_FILES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Too many files. Max {MAX_BATCH_FILES} files per batch request.",
         )
 
-        return {
-            "downloadUrl": _build_download_url(f"/downloads/{download_token}"),
-            "filename": "cropped_batch.zip",
-            "expiresIn": DOWNLOAD_TTL_SECONDS,
-        }
-    except Exception as e:
-        import traceback
+    crop_options = parse_crop_options(
+        target_aspect_ratio=target_aspect_ratio,
+        margin_top=margin_top,
+        margin_right=margin_right,
+        margin_bottom=margin_bottom,
+        margin_left=margin_left,
+        anchor_hint=anchor_hint,
+        crop_coordinates=crop_coordinates,
+        filters=filters,
+    )
 
-        tb = traceback.format_exc()
-        print("=== CROP BATCH FATAL ===")
-        print(tb)
-        print("========================")
-        raise HTTPException(status_code=500, detail=str(e))
+    media_updates = []
+    errors = []
+
+    for index, uploaded_file in enumerate(uploaded_files, start=1):
+        suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
+        tmp = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+        source_name = uploaded_file.filename or f"image_{index}{suffix}"
+
+        try:
+            total_bytes = await _stream_upload_to_temp_file(uploaded_file, tmp, source_name)
+            tmp.close()
+
+            if total_bytes == 0:
+                raise HTTPException(status_code=400, detail="Uploaded file is empty")
+
+            async with crop_request_slot():
+                cropped = run_crop_pipeline(tmp.name, method, crop_options, pipeline=pipeline)
+
+            output_info = resolve_output_format(source_name, uploaded_file.content_type)
+            output_filename = f"{Path(source_name).stem or f'image_{index}'}_cropped.{output_info['extension']}"
+            output_buffer = image_to_buffer(cropped, output_info["pil_format"])
+            try:
+                output_binary = output_buffer.getvalue()
+                output_bytes = len(output_binary)
+            finally:
+                output_buffer.close()
+
+            media_updates.append(
+                {
+                    "mediaId": None,
+                    "sourceMediaId": None,
+                    "destinationMediaId": None,
+                    "status": "updated",
+                    "updatedImageUrl": None,
+                    "adminTargetUrl": None,
+                    "sourceFilename": source_name,
+                    "outputFilename": output_filename,
+                    "contentType": output_info["media_type"],
+                    "bytes": output_bytes,
+                    "idempotencyKey": None,
+                    "mutationOutcome": "batch_crop",
+                    "error": None,
+                }
+            )
+        except HTTPException as exc:
+            message = str(exc.detail)
+            media_updates.append(
+                {
+                    "mediaId": None,
+                    "sourceMediaId": None,
+                    "destinationMediaId": None,
+                    "status": "failed",
+                    "updatedImageUrl": None,
+                    "adminTargetUrl": None,
+                    "sourceFilename": source_name,
+                    "idempotencyKey": None,
+                    "mutationOutcome": "batch_crop",
+                    "error": {"code": "crop_failed", "message": message, "sourceFilename": source_name},
+                }
+            )
+            errors.append({"code": "crop_failed", "message": message, "sourceFilename": source_name})
+        except Exception as exc:
+            message = str(exc)
+            media_updates.append(
+                {
+                    "mediaId": None,
+                    "sourceMediaId": None,
+                    "destinationMediaId": None,
+                    "status": "failed",
+                    "updatedImageUrl": None,
+                    "adminTargetUrl": None,
+                    "sourceFilename": source_name,
+                    "idempotencyKey": None,
+                    "mutationOutcome": "batch_crop",
+                    "error": {"code": "crop_failed", "message": message, "sourceFilename": source_name},
+                }
+            )
+            errors.append({"code": "crop_failed", "message": message, "sourceFilename": source_name})
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except Exception:
+                pass
+
+    requested_count = len(uploaded_files)
+    failed_count = len([item for item in media_updates if item.get("status") == "failed"])
+    success_count = requested_count - failed_count
+
+    response_status = "succeeded"
+    if failed_count and success_count:
+        response_status = "partial_failure"
+    elif failed_count and success_count == 0:
+        response_status = "failed"
+
+    return build_canonical_crop_response(
+        status=response_status,
+        media_updates=media_updates,
+        summary={
+            "requestedCount": requested_count,
+            "successCount": success_count,
+            "failedCount": failed_count,
+            "failedFiles": [item["sourceFilename"] for item in media_updates if item.get("status") == "failed"],
+        },
+        errors=errors,
+    )
 
 
 if __name__ == "__main__":

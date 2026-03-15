@@ -21,16 +21,6 @@ test("status route can poll a submitted job after simulated process restart", as
 
   const findCropJob = async (id) => persistedJobs.get(id) ?? null;
 
-  const loaderBeforeRestart = createCropJobStatusLoader({
-    authenticateAdmin,
-    findCropJob,
-  });
-
-  await loaderBeforeRestart({
-    request: new Request("https://example.com/status/job-restart-pending"),
-    params: { jobId },
-  });
-
   const loaderAfterRestart = createCropJobStatusLoader({
     authenticateAdmin,
     findCropJob,
@@ -42,7 +32,13 @@ test("status route can poll a submitted job after simulated process restart", as
   });
 
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { status: "pending" });
+  assert.deepEqual(await response.json(), {
+    status: "pending",
+    jobId,
+    mediaUpdates: [],
+    summary: { requestedCount: 0, successCount: 0, failedCount: 0, failedFiles: [] },
+    errors: [],
+  });
 });
 
 test("status route returns persisted succeeded payload after simulated restart", async () => {
@@ -55,9 +51,12 @@ test("status route returns persisted succeeded payload after simulated restart",
     status: "succeeded",
     error: null,
     resultPayload: {
-      storeUpdateResult: { updatedCount: 1 },
-      cropSummary: { elapsedSeconds: 1.2 },
-      auditMetadata: { shop: "restart-test.myshopify.com", mediaMutations: [] },
+      storeUpdateResult: {
+        mediaUpdates: [{ status: "updated", sourceFilename: "image.jpg" }],
+        cropSummary: { requestedCount: 1, successCount: 1, failedCount: 0, failedFiles: [] },
+        errors: [],
+      },
+      cropSummary: { requestedCount: 1, successCount: 1, failedCount: 0, failedFiles: [], elapsedSeconds: 1.2 },
     },
   });
 
@@ -76,8 +75,9 @@ test("status route returns persisted succeeded payload after simulated restart",
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     status: "succeeded",
-    storeUpdateResult: { updatedCount: 1 },
-    cropSummary: { elapsedSeconds: 1.2 },
-    auditMetadata: { shop: "restart-test.myshopify.com", mediaMutations: [] },
+    jobId,
+    mediaUpdates: [{ status: "updated", sourceFilename: "image.jpg" }],
+    summary: { requestedCount: 1, successCount: 1, failedCount: 0, failedFiles: [], elapsedSeconds: 1.2 },
+    errors: [],
   });
 });

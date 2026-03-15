@@ -17,7 +17,7 @@ import {
 import { PRO_PLAN } from "../utils/billing";
 import {
   buildRouteCropRequestContract,
-  buildStoreUpdateResultContract,
+  parseCanonicalCropResponse,
   normalizePipeline,
 } from "../utils/cropRequestContract.js";
 import {
@@ -346,20 +346,11 @@ function buildSupportToastMessage(message) {
   return `${baseMessage} ${SUPPORT_COPY_INSTRUCTION}`;
 }
 
-async function readJsonPayload(response, diagnostics = null) {
+async function readJsonPayload(response) {
   try {
     return await response.json();
   } catch {
-    const fallbackText = String(diagnostics?.textSnippet || "").trim();
-    if (!fallbackText) {
-      return null;
-    }
-
-    try {
-      return JSON.parse(fallbackText);
-    } catch {
-      return null;
-    }
+    return null;
   }
 }
 
@@ -506,16 +497,8 @@ function extractCropJobId(payload) {
     return null;
   }
 
-  const candidateId =
-    payload.jobId ||
-    payload.jobID ||
-    payload.job_id ||
-    payload.id ||
-    payload?.job?.id ||
-    null;
-
-  return typeof candidateId === "string" && candidateId.trim()
-    ? candidateId.trim()
+  return typeof payload.jobId === "string" && payload.jobId.trim()
+    ? payload.jobId.trim()
     : null;
 }
 
@@ -1107,7 +1090,18 @@ export const action = async ({ request }) => {
     },
   });
 
-  return Response.json({ jobId }, { status: 202 });
+  return Response.json({
+    status: "accepted",
+    jobId,
+    mediaUpdates: [],
+    summary: {
+      requestedCount: filesForCrop.length,
+      successCount: 0,
+      failedCount: 0,
+      failedFiles: [],
+    },
+    errors: [],
+  }, { status: 202 });
 };
 
 export default function CropImagePage() {
@@ -1306,7 +1300,7 @@ export default function CropImagePage() {
           throw pollError;
         }
 
-        jobStatus = await readJsonPayload(statusResponse, statusDiagnostics);
+        jobStatus = await readJsonPayload(statusResponse);
         if (!jobStatus || typeof jobStatus !== "object") {
           console.warn("Malformed crop status payload", {
             jobId,
@@ -1370,21 +1364,17 @@ export default function CropImagePage() {
           return;
         }
 
-        const normalizedResult =
-          buildStoreUpdateResultContract(jobStatus?.storeUpdateResult, {
-            files: selectedFiles,
-          }) ||
-          buildStoreUpdateResultContract(jobStatus, {
-            files: selectedFiles,
-          });
+        const normalizedResult = parseCanonicalCropResponse(jobStatus, {
+          files: selectedFiles,
+        });
 
         if (!normalizedResult) {
-          throw new Error(jobStatus?.error || "Crop finished without store update results.");
+          throw new Error("Crop service response did not match the expected schema.");
         }
 
         setStoreUpdateResult({
+          mode: "store-updated",
           ...normalizedResult,
-          cropSummary: jobStatus?.cropSummary || normalizedResult.cropSummary,
         });
 
         showToast("Crop completed. Images were updated in your store.");
@@ -2181,7 +2171,7 @@ export default function CropImagePage() {
         throw submitError;
       }
 
-      responsePayload = await readJsonPayload(response, responseDiagnostics);
+      responsePayload = await readJsonPayload(response);
 
       if (!responsePayload || typeof responsePayload !== "object") {
         console.warn("Malformed crop submit payload", {
@@ -2202,11 +2192,6 @@ export default function CropImagePage() {
         throw malformedError;
       }
 
-      if (typeof responsePayload?.error === "string" && responsePayload.error) {
-        showToast(responsePayload.error, { isError: true });
-        return;
-      }
-
       const responseJobId = extractCropJobId(responsePayload);
 
       if (!responseJobId) {
@@ -2220,21 +2205,17 @@ export default function CropImagePage() {
         correlationId,
       );
 
-      const normalizedResult =
-        buildStoreUpdateResultContract(jobStatus?.storeUpdateResult, {
-          files: selectedFiles,
-        }) ||
-        buildStoreUpdateResultContract(jobStatus, {
-          files: selectedFiles,
-        });
+      const normalizedResult = parseCanonicalCropResponse(jobStatus, {
+        files: selectedFiles,
+      });
 
       if (!normalizedResult) {
-        throw new Error(jobStatus?.error || "Crop finished without store update results.");
+        throw new Error("Crop service response did not match the expected schema.");
       }
 
       setStoreUpdateResult({
+        mode: "store-updated",
         ...normalizedResult,
-        cropSummary: jobStatus?.cropSummary || normalizedResult.cropSummary,
       });
       setCropFailureSummary("");
       setCropFailureDetails(null);
@@ -2769,11 +2750,6 @@ export default function CropImagePage() {
                     {" · "}
                     {storeUpdateResult?.cropSummary?.failedCount ?? 0} failed
                   </s-text>
-                  {storeUpdateResult?.mode === "zip-compat" && (
-                    <s-banner tone="warning">
-                      This result came from the legacy ZIP flow. Store media links are not available for this batch yet.
-                    </s-banner>
-                  )}
                   <s-stack direction="block" gap="tight">
                     {(storeUpdateResult?.mediaUpdates || []).map((mediaResult, index) => (
                       <s-box key={`${mediaResult.mediaId || mediaResult.sourceFilename || "media"}-${index}`} padding="small" border="base" borderRadius="small">
@@ -2808,8 +2784,8 @@ export default function CropImagePage() {
                               Open in Shopify admin
                             </s-link>
                           )}
-                          {mediaResult.error && (
-                            <s-text tone="critical">Error: {mediaResult.error}</s-text>
+                          {mediaResult.error?.message && (
+                            <s-text tone="critical">Error: {mediaResult.error.message}</s-text>
                           )}
                         </s-stack>
                       </s-box>

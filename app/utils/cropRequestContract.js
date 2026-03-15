@@ -1,5 +1,60 @@
 export const CROP_PIPELINES = ["auto", "face", "salience", "heuristic"];
 
+export const CANONICAL_CROP_STATUSES = [
+  "accepted",
+  "pending",
+  "running",
+  "succeeded",
+  "partial_failure",
+  "failed",
+];
+
+function asStringOrNull(value) {
+  if (value === null || value === undefined) {
+    return null;
+  }
+
+  const normalized = String(value).trim();
+  return normalized ? normalized : null;
+}
+
+function normalizeErrorObject(errorValue, fallbackCode = "unknown_error") {
+  if (!errorValue) {
+    return null;
+  }
+
+  if (typeof errorValue === "string") {
+    const message = asStringOrNull(errorValue);
+    return message ? { code: fallbackCode, message } : null;
+  }
+
+  if (typeof errorValue === "object") {
+    const code = asStringOrNull(errorValue.code) || fallbackCode;
+    const message =
+      asStringOrNull(errorValue.message) ||
+      asStringOrNull(errorValue.detail) ||
+      asStringOrNull(errorValue.error);
+
+    if (!message) {
+      return null;
+    }
+
+    const sourceFilename =
+      asStringOrNull(errorValue.sourceFilename) ||
+      asStringOrNull(errorValue.source_filename) ||
+      asStringOrNull(errorValue.file) ||
+      null;
+
+    return {
+      code,
+      message,
+      ...(sourceFilename ? { sourceFilename } : {}),
+    };
+  }
+
+  return null;
+}
+
 export function normalizePipeline(rawValue) {
   const value = String(rawValue || "")
     .trim()
@@ -69,7 +124,7 @@ function normalizeMediaUpdateStatus(rawStatus) {
     return "unknown";
   }
 
-  if (["updated", "success", "ok", "completed"].includes(value)) {
+  if (["updated", "success", "ok", "completed", "succeeded"].includes(value)) {
     return "updated";
   }
 
@@ -80,100 +135,127 @@ function normalizeMediaUpdateStatus(rawStatus) {
   return value;
 }
 
-function normalizeStoreUpdateResult(result, index, files) {
+function normalizeMediaUpdate(result, index, files) {
+  const sourceFilename =
+    asStringOrNull(result?.sourceFilename) ||
+    asStringOrNull(result?.source_filename) ||
+    asStringOrNull(result?.filename) ||
+    files[index]?.name ||
+    `image-${index + 1}`;
+
   return {
     mediaId:
-      result?.mediaId ||
-      result?.media_id ||
-      result?.shopifyMediaId ||
-      result?.shopify_media_id ||
+      asStringOrNull(result?.mediaId) ||
+      asStringOrNull(result?.media_id) ||
+      asStringOrNull(result?.shopifyMediaId) ||
+      asStringOrNull(result?.shopify_media_id) ||
       null,
-    sourceMediaId: result?.sourceMediaId || result?.source_media_id || null,
+    sourceMediaId:
+      asStringOrNull(result?.sourceMediaId) ||
+      asStringOrNull(result?.source_media_id) ||
+      null,
     destinationMediaId:
-      result?.destinationMediaId || result?.destination_media_id || null,
+      asStringOrNull(result?.destinationMediaId) ||
+      asStringOrNull(result?.destination_media_id) ||
+      null,
     status: normalizeMediaUpdateStatus(result?.status),
     updatedImageUrl:
-      result?.updatedImageUrl ||
-      result?.updated_image_url ||
-      result?.imageUrl ||
-      result?.image_url ||
+      asStringOrNull(result?.updatedImageUrl) ||
+      asStringOrNull(result?.updated_image_url) ||
+      asStringOrNull(result?.imageUrl) ||
+      asStringOrNull(result?.image_url) ||
       null,
     adminTargetUrl:
-      result?.adminTargetUrl ||
-      result?.admin_target_url ||
-      result?.mediaAdminUrl ||
-      result?.media_admin_url ||
-      result?.productAdminUrl ||
-      result?.product_admin_url ||
+      asStringOrNull(result?.adminTargetUrl) ||
+      asStringOrNull(result?.admin_target_url) ||
+      asStringOrNull(result?.mediaAdminUrl) ||
+      asStringOrNull(result?.media_admin_url) ||
+      asStringOrNull(result?.productAdminUrl) ||
+      asStringOrNull(result?.product_admin_url) ||
       null,
-    sourceFilename:
-      result?.sourceFilename ||
-      result?.source_filename ||
-      result?.filename ||
-      files[index]?.name ||
-      `image-${index + 1}`,
-    idempotencyKey: result?.idempotencyKey || result?.idempotency_key || null,
+    sourceFilename,
+    idempotencyKey:
+      asStringOrNull(result?.idempotencyKey) ||
+      asStringOrNull(result?.idempotency_key) ||
+      null,
     mutationOutcome:
-      result?.mutationOutcome || result?.mutation_outcome || null,
-    error: result?.error || null,
+      asStringOrNull(result?.mutationOutcome) ||
+      asStringOrNull(result?.mutation_outcome) ||
+      null,
+    error: normalizeErrorObject(result?.error, "media_update_failed"),
+  };
+}
+
+export function parseCanonicalCropResponse(payload, { files = [] } = {}) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+
+  if (!CANONICAL_CROP_STATUSES.includes(payload.status)) {
+    return null;
+  }
+
+  const mediaUpdates = Array.isArray(payload.mediaUpdates)
+    ? payload.mediaUpdates.map((item, index) => normalizeMediaUpdate(item, index, files))
+    : [];
+
+  const successCount = mediaUpdates.filter((item) => item.status === "updated").length;
+  const failedItems = mediaUpdates.filter((item) => item.status === "failed");
+
+  const summary = payload.summary && typeof payload.summary === "object"
+    ? payload.summary
+    : {};
+
+  const requestedCount =
+    Number.isInteger(summary.requestedCount) && summary.requestedCount >= 0
+      ? summary.requestedCount
+      : mediaUpdates.length;
+
+  const failedCount =
+    Number.isInteger(summary.failedCount) && summary.failedCount >= 0
+      ? summary.failedCount
+      : failedItems.length;
+
+  const normalizedErrors = Array.isArray(payload.errors)
+    ? payload.errors
+        .map((entry) => normalizeErrorObject(entry, "request_failed"))
+        .filter(Boolean)
+    : [];
+
+  return {
+    status: payload.status,
+    jobId: asStringOrNull(payload.jobId),
+    mediaUpdates,
+    cropSummary: {
+      requestedCount,
+      successCount:
+        Number.isInteger(summary.successCount) && summary.successCount >= 0
+          ? summary.successCount
+          : successCount,
+      failedCount,
+      failedFiles:
+        Array.isArray(summary.failedFiles) && summary.failedFiles.length
+          ? summary.failedFiles.map((item) => String(item))
+          : failedItems.map((item) => item.sourceFilename),
+      elapsedSeconds:
+        typeof summary.elapsedSeconds === "number" ? summary.elapsedSeconds : undefined,
+    },
+    errors: normalizedErrors,
   };
 }
 
 export function buildStoreUpdateResultContract(payload, { files = [] } = {}) {
-  const candidateResults =
-    payload?.storeUpdatedResults ||
-    payload?.store_updated_results ||
-    payload?.updatedMedia ||
-    payload?.updated_media ||
-    payload?.mediaUpdates ||
-    payload?.media_updates ||
-    payload?.results;
-
-  if (Array.isArray(candidateResults) && candidateResults.length > 0) {
-    const mediaUpdates = candidateResults.map((result, index) =>
-      normalizeStoreUpdateResult(result, index, files),
-    );
-
-    const successCount = mediaUpdates.filter((result) => result.status === "updated").length;
-    const failedItems = mediaUpdates.filter((result) => result.status === "failed");
-
-    return {
-      mode: "store-updated",
-      mediaUpdates,
-      cropSummary: {
-        requestedCount: mediaUpdates.length,
-        successCount,
-        failedCount: failedItems.length,
-        failedFiles: failedItems.map((result) => result.sourceFilename),
-      },
-      legacyZip: null,
-    };
+  const canonicalResponse = parseCanonicalCropResponse(payload, { files });
+  if (!canonicalResponse) {
+    return null;
   }
 
-  if (payload?.downloadUrl) {
-    return {
-      mode: "zip-compat",
-      mediaUpdates: files.map((file, index) => ({
-        mediaId: null,
-        status: "legacy_zip_only",
-        updatedImageUrl: null,
-        adminTargetUrl: null,
-        sourceFilename: file?.name || `image-${index + 1}`,
-        error: null,
-      })),
-      cropSummary: {
-        requestedCount: files.length,
-        successCount: files.length,
-        failedCount: 0,
-        failedFiles: [],
-      },
-      legacyZip: {
-        downloadUrl: payload.downloadUrl,
-        filename: payload.filename || "cropped_batch.zip",
-        expiresIn: payload.expiresIn || 600,
-      },
-    };
-  }
-
-  return null;
+  return {
+    mode: "store-updated",
+    mediaUpdates: canonicalResponse.mediaUpdates,
+    cropSummary: canonicalResponse.cropSummary,
+    errors: canonicalResponse.errors,
+    status: canonicalResponse.status,
+    jobId: canonicalResponse.jobId,
+  };
 }
