@@ -106,10 +106,22 @@ async function parseSingleCropResponse(response, fallbackFilename) {
 
   if (contentType.includes("application/json")) {
     const payload = await response.json();
+    const firstMediaUpdate = Array.isArray(payload?.mediaUpdates)
+      ? payload.mediaUpdates[0]
+      : null;
     const rawBase64 =
-      payload?.croppedBase64 || payload?.cropped_base64 || payload?.imageBase64;
+      payload?.croppedBase64 ||
+      payload?.cropped_base64 ||
+      payload?.imageBase64 ||
+      firstMediaUpdate?.croppedBase64 ||
+      firstMediaUpdate?.cropped_base64;
     const outputUrl =
-      payload?.croppedUrl || payload?.cropped_url || payload?.imageUrl || payload?.url;
+      payload?.croppedUrl ||
+      payload?.cropped_url ||
+      payload?.imageUrl ||
+      payload?.url ||
+      firstMediaUpdate?.updatedImageUrl ||
+      firstMediaUpdate?.updated_image_url;
 
     if (rawBase64) {
       const [prefix, base64] = String(rawBase64).includes(",")

@@ -1,3 +1,5 @@
+import io
+import json
 from types import SimpleNamespace
 
 import pytest
@@ -347,7 +349,7 @@ def test_run_crop_pipeline_raises_runtime_error_when_crop_method_returns_none(mo
         fastapi_main_module.run_crop_pipeline("tmp.jpg", "profile", fastapi_main_module.CropOptions())
 
 
-def test_crop_batch_endpoint_returns_local_download_payload(monkeypatch, fastapi_main_module):
+def test_crop_batch_endpoint_returns_canonical_payload(monkeypatch, fastapi_main_module):
     import asyncio
     import io
 
@@ -357,14 +359,9 @@ def test_crop_batch_endpoint_returns_local_download_payload(monkeypatch, fastapi
     monkeypatch.setattr(
         fastapi_main_module,
         "resolve_output_format",
-        lambda *args, **kwargs: {"extension": "png", "pil_format": "PNG"},
+        lambda *args, **kwargs: {"extension": "png", "pil_format": "PNG", "media_type": "image/png"},
     )
     monkeypatch.setattr(fastapi_main_module, "image_to_buffer", lambda *args, **kwargs: io.BytesIO(b"png-bytes"))
-    monkeypatch.setattr(
-        fastapi_main_module,
-        "_register_download",
-        lambda zip_bytes, filename: "download-token",
-    )
 
     upload = UploadFile(
         file=io.BytesIO(b"fake-image-bytes"),
@@ -388,11 +385,10 @@ def test_crop_batch_endpoint_returns_local_download_payload(monkeypatch, fastapi
         )
     )
 
-    assert response == {
-        "downloadUrl": "/downloads/download-token",
-        "filename": "cropped_batch.zip",
-        "expiresIn": 600,
-    }
+    assert response["status"] == "succeeded"
+    assert response["summary"]["requestedCount"] == 1
+    assert response["summary"]["failedCount"] == 0
+    assert len(response["mediaUpdates"]) == 1
 
 
 def test_salience_compute_candidate_crop_box_prefers_largest_component(fastapi_main_module):
@@ -423,3 +419,132 @@ def test_salience_compute_candidate_crop_box_uses_center_bias_fallback(fastapi_m
     )
 
     assert box == (16, 9, 84, 77)
+
+
+
+def _make_png_bytes():
+    image = Image.new("RGB", (4, 4), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def test_crop_batch_contract_success(monkeypatch, fastapi_main_module):
+    import asyncio
+
+    from starlette.datastructures import Headers, UploadFile
+
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "run_crop_pipeline",
+        lambda *args, **kwargs: Image.new("RGB", (8, 8), "white"),
+    )
+
+    upload = UploadFile(
+        file=io.BytesIO(_make_png_bytes()),
+        filename="ok.png",
+        headers=Headers({"content-type": "image/png"}),
+    )
+
+    payload = asyncio.run(
+        fastapi_main_module.crop_batch_endpoint(
+            files=[upload],
+            file=None,
+            pipeline="auto",
+            method="auto",
+            target_aspect_ratio=None,
+            margin_top=None,
+            margin_right=None,
+            margin_bottom=None,
+            margin_left=None,
+            anchor_hint=None,
+            crop_coordinates=None,
+            filters=None,
+            _=None,
+        )
+    )
+
+    assert payload["status"] == "succeeded"
+    assert payload["summary"]["failedCount"] == 0
+    assert payload["mediaUpdates"][0]["status"] == "updated"
+
+
+def test_crop_batch_contract_partial_failure(monkeypatch, fastapi_main_module):
+    import asyncio
+
+    from starlette.datastructures import Headers, UploadFile
+
+    state = {"calls": 0}
+
+    def _run_crop_pipeline(path, method, crop_options, pipeline="auto"):
+        state["calls"] += 1
+        if state["calls"] == 2:
+            raise RuntimeError("boom")
+        return Image.new("RGB", (8, 8), "white")
+
+    monkeypatch.setattr(fastapi_main_module, "run_crop_pipeline", _run_crop_pipeline)
+
+    uploads = [
+        UploadFile(file=io.BytesIO(_make_png_bytes()), filename="ok.png", headers=Headers({"content-type": "image/png"})),
+        UploadFile(file=io.BytesIO(_make_png_bytes()), filename="fail.png", headers=Headers({"content-type": "image/png"})),
+    ]
+
+    payload = asyncio.run(
+        fastapi_main_module.crop_batch_endpoint(
+            files=uploads,
+            file=None,
+            pipeline="auto",
+            method="auto",
+            target_aspect_ratio=None,
+            margin_top=None,
+            margin_right=None,
+            margin_bottom=None,
+            margin_left=None,
+            anchor_hint=None,
+            crop_coordinates=None,
+            filters=None,
+            _=None,
+        )
+    )
+
+    assert payload["status"] == "partial_failure"
+    assert payload["summary"]["failedCount"] == 1
+    assert len(payload["errors"]) == 1
+
+
+def test_crop_contract_auth_failure(monkeypatch, fastapi_main_module):
+    import asyncio
+
+    monkeypatch.setattr(fastapi_main_module, "SMARTCROP_API_TOKEN", "token")
+
+    with pytest.raises(HTTPException) as exc_info:
+        fastapi_main_module.require_smartcrop_token(None)
+
+    response = asyncio.run(
+        fastapi_main_module.canonical_http_exception_handler(
+            fastapi_main_module.Request({"type": "http", "method": "POST", "path": "/crop/batch", "headers": []}),
+            exc_info.value,
+        )
+    )
+
+    assert response.status_code == 401
+    payload = json.loads(response.body)
+    assert payload["status"] == "failed"
+    assert payload["errors"][0]["code"] == "auth_error"
+
+
+def test_crop_contract_validation_failure(fastapi_main_module):
+    import asyncio
+
+    exc = HTTPException(status_code=400, detail="pipeline must be one of: auto, face, salience, heuristic")
+    response = asyncio.run(
+        fastapi_main_module.canonical_http_exception_handler(
+            fastapi_main_module.Request({"type": "http", "method": "POST", "path": "/crop/batch", "headers": []}),
+            exc,
+        )
+    )
+
+    assert response.status_code == 400
+    payload = json.loads(response.body)
+    assert payload["status"] == "failed"
+    assert payload["errors"][0]["message"]

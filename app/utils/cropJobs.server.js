@@ -105,8 +105,28 @@ async function runCropJob(
         cropParams: options,
       });
 
+      const failedCount = writeBackResults.filter((item) => item?.status === "failed").length;
       storeUpdateResult = buildStoreUpdateResultContract(
-        { storeUpdatedResults: writeBackResults },
+        {
+          status: failedCount ? "partial_failure" : "succeeded",
+          jobId,
+          mediaUpdates: writeBackResults,
+          summary: {
+            requestedCount: writeBackResults.length,
+            successCount: writeBackResults.length - failedCount,
+            failedCount,
+          },
+          errors: writeBackResults
+            .filter((item) => item?.status === "failed" && item?.error)
+            .map((item) => ({
+              code: "media_update_failed",
+              message:
+                typeof item.error === "string"
+                  ? item.error
+                  : item.error?.message || "Media update failed",
+              sourceFilename: item.sourceFilename || null,
+            })),
+        },
         { files },
       );
     } else {

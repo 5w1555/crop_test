@@ -4,12 +4,40 @@ export function createCropJobStatusLoader({ authenticateAdmin, findCropJob }) {
     const jobId = params.jobId;
 
     if (!jobId) {
-      return Response.json({ error: "Missing job ID." }, { status: 400 });
+      return Response.json(
+        {
+          status: "failed",
+          jobId: null,
+          mediaUpdates: [],
+          summary: {
+            requestedCount: 0,
+            successCount: 0,
+            failedCount: 0,
+            failedFiles: [],
+          },
+          errors: [{ code: "validation_error", message: "Missing job ID." }],
+        },
+        { status: 400 },
+      );
     }
 
     const job = await findCropJob(jobId);
     if (!job || job.shop !== session.shop) {
-      return Response.json({ error: "Job not found." }, { status: 404 });
+      return Response.json(
+        {
+          status: "failed",
+          jobId,
+          mediaUpdates: [],
+          summary: {
+            requestedCount: 0,
+            successCount: 0,
+            failedCount: 0,
+            failedFiles: [],
+          },
+          errors: [{ code: "not_found", message: "Job not found." }],
+        },
+        { status: 404 },
+      );
     }
 
     const resultPayload =
@@ -20,20 +48,52 @@ export function createCropJobStatusLoader({ authenticateAdmin, findCropJob }) {
     if (job.status === "failed") {
       return Response.json({
         status: "failed",
-        error: job.error || "Unable to crop image. Please retry.",
+        jobId,
+        mediaUpdates: [],
+        summary: {
+          requestedCount: 0,
+          successCount: 0,
+          failedCount: 1,
+          failedFiles: [],
+        },
+        errors: [
+          {
+            code: "job_failed",
+            message: job.error || "Unable to crop image. Please retry.",
+          },
+        ],
       });
     }
 
     if (job.status === "succeeded") {
       return Response.json({
-        status: "succeeded",
-        storeUpdateResult: resultPayload?.storeUpdateResult || undefined,
-        cropSummary: resultPayload?.cropSummary || undefined,
-        auditMetadata: resultPayload?.auditMetadata || undefined,
-        error: job.error || undefined,
+        status:
+          resultPayload?.storeUpdateResult?.cropSummary?.failedCount > 0
+            ? "partial_failure"
+            : "succeeded",
+        jobId,
+        mediaUpdates: resultPayload?.storeUpdateResult?.mediaUpdates || [],
+        summary: resultPayload?.cropSummary || resultPayload?.storeUpdateResult?.cropSummary || {
+          requestedCount: 0,
+          successCount: 0,
+          failedCount: 0,
+          failedFiles: [],
+        },
+        errors: resultPayload?.storeUpdateResult?.errors || [],
       });
     }
 
-    return Response.json({ status: job.status });
+    return Response.json({
+      status: job.status,
+      jobId,
+      mediaUpdates: [],
+      summary: {
+        requestedCount: 0,
+        successCount: 0,
+        failedCount: 0,
+        failedFiles: [],
+      },
+      errors: [],
+    });
   };
 }
