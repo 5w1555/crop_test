@@ -1,4 +1,5 @@
 import process from "node:process";
+import { Buffer } from "node:buffer";
 import test from "node:test";
 import assert from "node:assert/strict";
 const moduleUrl = new URL("./smartCropClient.js", import.meta.url).href;
@@ -225,4 +226,39 @@ test("cropImage throws when SMARTCROP_API_TOKEN is missing", async () => {
   const file = new File(["image-bytes"], "avatar.png", { type: "image/png" });
 
   await assert.rejects(() => cropImage(file), /SMARTCROP_API_TOKEN is required/);
+});
+
+test("cropImagesWithOutputs returns binary results per file", async () => {
+  const { cropImagesWithOutputs } = await loadClient("https://crop.example");
+
+  global.fetch = async () =>
+    new Response(Uint8Array.from([1, 2, 3, 4]), {
+      status: 200,
+      headers: { "content-type": "image/png" },
+    });
+
+  const files = [new File(["a"], "first.png", { type: "image/png" })];
+  const outputs = await cropImagesWithOutputs(files, { method: "auto" });
+
+  assert.equal(outputs.length, 1);
+  assert.equal(outputs[0].sourceFilename, "first.png");
+  assert.equal(outputs[0].contentType, "image/png");
+  assert.equal(outputs[0].byteLength, 4);
+  assert.ok(Buffer.isBuffer(outputs[0].binary));
+});
+
+test("cropImagesWithOutputs supports url-based JSON responses", async () => {
+  const { cropImagesWithOutputs } = await loadClient("https://crop.example");
+
+  global.fetch = async () =>
+    new Response(JSON.stringify({ imageUrl: "https://cdn.example/crop-1.png" }), {
+      status: 200,
+      headers: { "content-type": "application/json" },
+    });
+
+  const files = [new File(["a"], "first.png", { type: "image/png" })];
+  const outputs = await cropImagesWithOutputs(files, { method: "auto" });
+
+  assert.equal(outputs[0].url, "https://cdn.example/crop-1.png");
+  assert.equal(outputs[0].binary, null);
 });

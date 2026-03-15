@@ -30,6 +30,7 @@ export const loader = async ({ request, params }) => {
     status: "done",
     storeUpdateResult: job.storeUpdateResult || undefined,
     cropSummary: job.cropSummary || undefined,
+    auditMetadata: job.auditMetadata || undefined,
     error: job.error || undefined,
   });
 };

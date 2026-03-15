@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 
-import { cropImages } from "./smartCropClient.js";
+import { cropImages, cropImagesWithOutputs } from "./smartCropClient.js";
 import { commitPlanUsage } from "./plan.server.js";
 import { buildStoreUpdateResultContract } from "./cropRequestContract.js";
+import { writeBackCroppedMedia } from "./mediaWriteback.server.js";
 
 const JOB_TTL_MS = 15 * 60 * 1000;
 
@@ -14,7 +15,14 @@ function scheduleCleanup(jobId) {
   }, JOB_TTL_MS).unref?.();
 }
 
-export function createCropJob({ shop, files, options, startedAt }) {
+export function createCropJob({
+  shop,
+  admin,
+  files,
+  options,
+  startedAt,
+  mediaTargets = [],
+}) {
   const jobId = randomUUID();
 
   jobs.set(jobId, {
@@ -25,25 +33,56 @@ export function createCropJob({ shop, files, options, startedAt }) {
     finishedAt: null,
     storeUpdateResult: null,
     cropSummary: null,
+    auditMetadata: {
+      shop,
+      mediaMutations: [],
+    },
     error: null,
   });
 
-  void runCropJob(jobId, { shop, files, options, startedAt });
+  void runCropJob(jobId, {
+    shop,
+    admin,
+    files,
+    options,
+    startedAt,
+    mediaTargets,
+  });
   scheduleCleanup(jobId);
 
   return jobId;
 }
 
-async function runCropJob(jobId, { shop, files, options, startedAt }) {
+async function runCropJob(
+  jobId,
+  { shop, admin, files, options, startedAt, mediaTargets },
+) {
   const job = jobs.get(jobId);
   if (!job) return;
 
   try {
-    const response = await cropImages(files, options);
     const elapsedMs = Date.now() - startedAt;
-    const payload = await response.json();
+    let storeUpdateResult;
 
-    const storeUpdateResult = buildStoreUpdateResultContract(payload, { files });
+    if (Array.isArray(mediaTargets) && mediaTargets.length) {
+      const cropOutputs = await cropImagesWithOutputs(files, options);
+      const writeBackResults = await writeBackCroppedMedia({
+        admin,
+        shop,
+        cropOutputs,
+        mediaTargets,
+        cropParams: options,
+      });
+
+      storeUpdateResult = buildStoreUpdateResultContract(
+        { storeUpdatedResults: writeBackResults },
+        { files },
+      );
+    } else {
+      const response = await cropImages(files, options);
+      const payload = await response.json();
+      storeUpdateResult = buildStoreUpdateResultContract(payload, { files });
+    }
 
     if (!storeUpdateResult) {
       throw new Error("Crop API response is missing store update results.");
@@ -59,6 +98,17 @@ async function runCropJob(jobId, { shop, files, options, startedAt }) {
       status: "done",
       finishedAt: Date.now(),
       storeUpdateResult,
+      auditMetadata: {
+        shop,
+        mediaMutations: (storeUpdateResult.mediaUpdates || []).map((item) => ({
+          shop,
+          sourceMediaId: item.sourceMediaId || item.mediaId || null,
+          destinationMediaId: item.destinationMediaId || null,
+          status: item.status,
+          mutationOutcome: item.mutationOutcome || null,
+          error: item.error || null,
+        })),
+      },
       cropSummary: {
         ...storeUpdateResult.cropSummary,
         elapsedSeconds: Number((elapsedMs / 1000).toFixed(2)),

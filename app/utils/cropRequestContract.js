@@ -88,6 +88,9 @@ function normalizeStoreUpdateResult(result, index, files) {
       result?.shopifyMediaId ||
       result?.shopify_media_id ||
       null,
+    sourceMediaId: result?.sourceMediaId || result?.source_media_id || null,
+    destinationMediaId:
+      result?.destinationMediaId || result?.destination_media_id || null,
     status: normalizeMediaUpdateStatus(result?.status),
     updatedImageUrl:
       result?.updatedImageUrl ||
@@ -109,6 +112,9 @@ function normalizeStoreUpdateResult(result, index, files) {
       result?.filename ||
       files[index]?.name ||
       `image-${index + 1}`,
+    idempotencyKey: result?.idempotencyKey || result?.idempotency_key || null,
+    mutationOutcome:
+      result?.mutationOutcome || result?.mutation_outcome || null,
     error: result?.error || null,
   };
 }

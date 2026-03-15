@@ -1,4 +1,5 @@
 import process from "node:process";
+import { Buffer } from "node:buffer";
 
 const DEFAULT_RENDER_API_URL = "https://smart-crop-api-f97p.onrender.com";
 
@@ -98,6 +99,69 @@ export async function cropImages(files, options = {}) {
   }
 
   return res;
+}
+
+async function parseSingleCropResponse(response, fallbackFilename) {
+  const contentType = response.headers.get("content-type") || "";
+
+  if (contentType.includes("application/json")) {
+    const payload = await response.json();
+    const rawBase64 =
+      payload?.croppedBase64 || payload?.cropped_base64 || payload?.imageBase64;
+    const outputUrl =
+      payload?.croppedUrl || payload?.cropped_url || payload?.imageUrl || payload?.url;
+
+    if (rawBase64) {
+      const [prefix, base64] = String(rawBase64).includes(",")
+        ? String(rawBase64).split(",", 2)
+        : ["", String(rawBase64)];
+      const encodedMime = prefix.match(/data:(.*?);base64/i)?.[1];
+      const binary = Buffer.from(base64, "base64");
+
+      return {
+        sourceFilename: fallbackFilename,
+        contentType: encodedMime || "image/jpeg",
+        binary,
+        byteLength: binary.byteLength,
+        url: null,
+      };
+    }
+
+    if (outputUrl) {
+      return {
+        sourceFilename: fallbackFilename,
+        contentType: "",
+        binary: null,
+        byteLength: 0,
+        url: String(outputUrl),
+      };
+    }
+
+    throw new Error("Crop API JSON response did not include cropped output data.");
+  }
+
+  const arrayBuffer = await response.arrayBuffer();
+  const binary = Buffer.from(arrayBuffer);
+
+  return {
+    sourceFilename: fallbackFilename,
+    contentType: contentType || "image/jpeg",
+    binary,
+    byteLength: binary.byteLength,
+    url: null,
+  };
+}
+
+export async function cropImagesWithOutputs(files, options = {}) {
+  const outputs = [];
+
+  for (const [index, file] of files.entries()) {
+    const response = await cropImage(file, options);
+    const fallbackFilename = file?.name || `image-${index + 1}`;
+    outputs.push(await parseSingleCropResponse(response, fallbackFilename));
+  }
+
+  return outputs;
 }
 
 export async function health() {
