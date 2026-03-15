@@ -1,5 +1,9 @@
 import { createHash } from "node:crypto";
 
+import { Prisma } from "@prisma/client";
+
+import prisma from "../db.server.js";
+
 const STAGED_UPLOADS_CREATE_MUTATION = `#graphql
   mutation CreateStagedUploads($input: [StagedUploadInput!]!) {
     stagedUploadsCreate(input: $input) {
@@ -54,13 +58,22 @@ const PRODUCT_DELETE_MEDIA_MUTATION = `#graphql
   }
 `;
 
-const idempotencyLedger = new Map();
+const IDEMPOTENCY_IN_PROGRESS = "in_progress";
+const IDEMPOTENCY_SUCCEEDED = "succeeded";
+const IDEMPOTENCY_FAILED = "failed";
 
-function buildIdempotencyKey({ shop, sourceMediaId, cropParams }) {
+const IN_PROGRESS_MAX_POLLS = 15;
+const IN_PROGRESS_POLL_DELAY_MS = 25;
+
+function buildCropParamsHash(cropParams) {
+  return createHash("sha256").update(JSON.stringify(cropParams ?? null)).digest("hex");
+}
+
+function buildIdempotencyKey({ shop, sourceMediaId, cropParamsHash }) {
   const serialized = JSON.stringify({
     shop,
     sourceMediaId,
-    cropParams,
+    cropParamsHash,
   });
 
   return createHash("sha256").update(serialized).digest("hex");
@@ -170,6 +183,125 @@ async function maybeDeleteOriginalMedia({ admin, productId, sourceMediaId }) {
   return result?.deletedMediaIds || [];
 }
 
+function mapPersistedRecordToResult({ source, output, record, idempotencyKey }) {
+  if (record.status === IDEMPOTENCY_SUCCEEDED) {
+    return {
+      mediaId: source.mediaId,
+      sourceMediaId: source.mediaId,
+      destinationMediaId: record.destinationMediaId,
+      sourceFilename: output.sourceFilename,
+      status: "updated",
+      updatedImageUrl: record.updatedImageUrl,
+      adminTargetUrl: null,
+      error: null,
+      idempotencyKey,
+      mutationOutcome: "reused",
+    };
+  }
+
+  return {
+    mediaId: source.mediaId,
+    sourceMediaId: source.mediaId,
+    destinationMediaId: null,
+    sourceFilename: output.sourceFilename,
+    status: "failed",
+    updatedImageUrl: null,
+    adminTargetUrl: null,
+    error: record.error || "Write-back failed.",
+    idempotencyKey,
+    mutationOutcome: "failed",
+  };
+}
+
+function isUniqueConstraintError(error) {
+  return (
+    (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") ||
+    (Boolean(error) && typeof error === "object" && error.code === "P2002")
+  );
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function resolvePersistedState({ db, shop, sourceMediaId, cropParamsHash }) {
+  for (let pollCount = 0; pollCount <= IN_PROGRESS_MAX_POLLS; pollCount += 1) {
+    const existing = await db.mediaWritebackIdempotency.findUnique({
+      where: {
+        shop_sourceMediaId_cropParamsHash: {
+          shop,
+          sourceMediaId,
+          cropParamsHash,
+        },
+      },
+    });
+
+    if (!existing || existing.status !== IDEMPOTENCY_IN_PROGRESS) {
+      return existing;
+    }
+
+    await sleep(IN_PROGRESS_POLL_DELAY_MS);
+  }
+
+  return null;
+}
+
+async function claimIdempotencySlot({ db, shop, sourceMediaId, cropParamsHash, idempotencyKey }) {
+  const existing = await db.mediaWritebackIdempotency.findUnique({
+    where: {
+      shop_sourceMediaId_cropParamsHash: {
+        shop,
+        sourceMediaId,
+        cropParamsHash,
+      },
+    },
+  });
+
+  if (existing) {
+    return {
+      claimed: false,
+      record: existing,
+    };
+  }
+
+  try {
+    await db.$transaction(async (tx) => {
+      await tx.mediaWritebackIdempotency.create({
+        data: {
+          shop,
+          sourceMediaId,
+          cropParamsHash,
+          idempotencyKey,
+          status: IDEMPOTENCY_IN_PROGRESS,
+        },
+      });
+    });
+
+    return {
+      claimed: true,
+      record: null,
+    };
+  } catch (error) {
+    if (!isUniqueConstraintError(error)) {
+      throw error;
+    }
+
+    const persisted = await resolvePersistedState({
+      db,
+      shop,
+      sourceMediaId,
+      cropParamsHash,
+    });
+
+    return {
+      claimed: false,
+      record: persisted,
+    };
+  }
+}
+
 export async function writeBackCroppedMedia({
   admin,
   shop,
@@ -177,6 +309,7 @@ export async function writeBackCroppedMedia({
   mediaTargets,
   cropParams,
   replaceExisting = true,
+  db = prisma,
 }) {
   if (!Array.isArray(cropOutputs) || !Array.isArray(mediaTargets)) {
     throw new Error("Invalid write-back payload.");
@@ -193,21 +326,44 @@ export async function writeBackCroppedMedia({
   for (const [index, source] of targets.entries()) {
     const output = cropOutputs[index];
     const stagedTarget = uploadTargets[index];
+    const cropParamsHash = buildCropParamsHash(cropParams);
     const idempotencyKey = buildIdempotencyKey({
       shop,
       sourceMediaId: source.mediaId,
-      cropParams,
+      cropParamsHash,
     });
 
-    if (idempotencyLedger.has(idempotencyKey)) {
-      perItemResults.push({
-        ...idempotencyLedger.get(idempotencyKey),
-        sourceMediaId: source.mediaId,
-        sourceFilename: output.sourceFilename,
-        idempotencyKey,
-        status: "updated",
-        mutationOutcome: "reused-idempotent-result",
-      });
+    const claim = await claimIdempotencySlot({
+      db,
+      shop,
+      sourceMediaId: source.mediaId,
+      cropParamsHash,
+      idempotencyKey,
+    });
+
+    if (!claim.claimed) {
+      const persisted = claim.record;
+      perItemResults.push(
+        persisted
+          ? mapPersistedRecordToResult({
+              source,
+              output,
+              record: persisted,
+              idempotencyKey,
+            })
+          : {
+              mediaId: source.mediaId,
+              sourceMediaId: source.mediaId,
+              destinationMediaId: null,
+              sourceFilename: output.sourceFilename,
+              status: "failed",
+              updatedImageUrl: null,
+              adminTargetUrl: null,
+              error: "Timed out waiting for existing write-back operation.",
+              idempotencyKey,
+              mutationOutcome: "failed",
+            },
+      );
       continue;
     }
 
@@ -228,7 +384,23 @@ export async function writeBackCroppedMedia({
         });
       }
 
-      const successful = {
+      await db.mediaWritebackIdempotency.update({
+        where: {
+          shop_sourceMediaId_cropParamsHash: {
+            shop,
+            sourceMediaId: source.mediaId,
+            cropParamsHash,
+          },
+        },
+        data: {
+          status: IDEMPOTENCY_SUCCEEDED,
+          destinationMediaId: createdMedia.id,
+          updatedImageUrl: createdMedia.image?.url || null,
+          error: null,
+        },
+      });
+
+      perItemResults.push({
         mediaId: source.mediaId,
         sourceMediaId: source.mediaId,
         destinationMediaId: createdMedia.id,
@@ -238,12 +410,27 @@ export async function writeBackCroppedMedia({
         adminTargetUrl: null,
         error: null,
         idempotencyKey,
-        mutationOutcome: replaceExisting ? "created-and-replaced" : "created",
-      };
-
-      idempotencyLedger.set(idempotencyKey, successful);
-      perItemResults.push(successful);
+        mutationOutcome: "created",
+      });
     } catch (error) {
+      const message = error instanceof Error ? error.message : "Write-back failed.";
+
+      await db.mediaWritebackIdempotency.update({
+        where: {
+          shop_sourceMediaId_cropParamsHash: {
+            shop,
+            sourceMediaId: source.mediaId,
+            cropParamsHash,
+          },
+        },
+        data: {
+          status: IDEMPOTENCY_FAILED,
+          destinationMediaId: null,
+          updatedImageUrl: null,
+          error: message,
+        },
+      });
+
       perItemResults.push({
         mediaId: source.mediaId,
         sourceMediaId: source.mediaId,
@@ -252,9 +439,9 @@ export async function writeBackCroppedMedia({
         status: "failed",
         updatedImageUrl: null,
         adminTargetUrl: null,
-        error: error instanceof Error ? error.message : "Write-back failed.",
+        error: message,
         idempotencyKey,
-        mutationOutcome: "error",
+        mutationOutcome: "failed",
       });
     }
   }
