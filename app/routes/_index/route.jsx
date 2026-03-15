@@ -22,7 +22,7 @@ export default function App() {
         <h1 className={styles.heading}>SmartCrop automatically prepares cleaner product crops</h1>
         <p className={styles.text}>
           SmartCrop helps Shopify teams upload one or more images, apply consistent cropping,
-          and download production-ready results from a single screen.
+          and apply consistent crops directly to product media without manual re-uploads.
         </p>
 
         <div className={styles.grid}>
@@ -31,7 +31,7 @@ export default function App() {
             <ul>
               <li>Runs content-aware cropping for reliable framing across large batches.</li>
               <li>Supports advanced face-detection crop methods for portrait-heavy catalogs.</li>
-              <li>Generates a direct ZIP download so edited assets are ready to reuse.</li>
+              <li>Updates Shopify media in place so teams can publish faster without download/re-upload steps.</li>
             </ul>
           </section>
 
@@ -75,7 +75,7 @@ export default function App() {
 
         <p className={styles.nextStep}>
           Next: open <strong>Crop Images</strong> in <code>/app/additional</code> to upload files,
-          run SmartCrop, and download results.
+          run SmartCrop, and review updates in Shopify admin.
         </p>
       </div>
     </div>

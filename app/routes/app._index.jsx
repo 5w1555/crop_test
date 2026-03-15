@@ -12,7 +12,7 @@ export default function Index() {
       <s-section heading="Start with Crop Image">
         <s-paragraph>
           Use <s-link href="/app/additional">Crop Image</s-link> to upload a
-          file, run Smart Crop, and download the cropped output.
+          file, run Smart Crop, and update the existing Shopify media in place.
         </s-paragraph>
       </s-section>
 

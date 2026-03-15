@@ -28,9 +28,7 @@ export const loader = async ({ request, params }) => {
 
   return Response.json({
     status: "done",
-    downloadUrl: job.downloadUrl || undefined,
-    filename: job.filename || undefined,
-    expiresIn: job.expiresIn || undefined,
+    storeUpdateResult: job.storeUpdateResult || undefined,
     cropSummary: job.cropSummary || undefined,
     error: job.error || undefined,
   });
