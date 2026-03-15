@@ -27,16 +27,6 @@ const SHOPIFY_MEDIA_QUERY = `#graphql
           }
         }
       }
-      ... on MediaImage {
-        id
-        image {
-          url
-        }
-        product {
-          id
-          title
-        }
-      }
     }
   }
 `;
@@ -72,7 +62,8 @@ export async function resolveSelectedMedia({ admin, mediaIds, productIds }) {
       !node ||
       node.__typename !== "MediaImage" ||
       !node.id ||
-      !node.image?.url
+      !node.image?.url ||
+      !fallbackProduct?.id
     ) {
       return false;
     }
@@ -81,27 +72,15 @@ export async function resolveSelectedMedia({ admin, mediaIds, productIds }) {
       return true;
     }
 
-    const productId = fallbackProduct?.id || node.product?.id;
-    if (!productId) {
-      return false;
-    }
-
     seenMediaIds.add(node.id);
     media.push({
       mediaId: node.id,
       sourceUrl: node.image.url,
-      productId,
-      productTitle: fallbackProduct?.title || node.product?.title || "",
+      productId: fallbackProduct.id,
+      productTitle: fallbackProduct.title || "",
     });
     return true;
   };
-
-  normalizedMediaIds.forEach((mediaId) => {
-    const node = nodesById.get(mediaId);
-    if (!appendMediaNode(node, null)) {
-      invalidMediaIds.push(mediaId);
-    }
-  });
 
   normalizedProductIds.forEach((productId) => {
     const node = nodesById.get(productId);
@@ -115,6 +94,11 @@ export async function resolveSelectedMedia({ admin, mediaIds, productIds }) {
     productMediaNodes.forEach((mediaNode) => {
       appendMediaNode(mediaNode, { id: node.id, title: node.title || "" });
     });
+  });
+
+  normalizedMediaIds.forEach((mediaId) => {
+    const existsInResolvedProducts = media.some((item) => item.mediaId === mediaId);
+    if (!existsInResolvedProducts) invalidMediaIds.push(mediaId);
   });
 
   return {
