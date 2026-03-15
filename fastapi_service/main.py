@@ -1782,40 +1782,75 @@ def build_canonical_crop_response(
     }
 
 
+def build_error_payload(*, code: str, message: str, details: dict | None = None):
+    return {
+        "code": code,
+        "message": message,
+        "details": details or {},
+    }
+
+
+def _error_code_for_status(status_code: int) -> str:
+    if status_code in (401, 403):
+        return "auth_error"
+    if status_code in (400, 413, 422):
+        return "validation_error"
+    if status_code in (429, 503, 504):
+        return "resource_error"
+    if status_code >= 500:
+        return "internal_error"
+    return "request_error"
+
+
 def _coerce_error_list(detail, *, code: str):
     if isinstance(detail, list):
         errors = []
         for item in detail:
             if isinstance(item, dict):
+                if "code" in item and "message" in item:
+                    errors.append(
+                        build_error_payload(
+                            code=str(item.get("code")),
+                            message=str(item.get("message")),
+                            details=item.get("details") if isinstance(item.get("details"), dict) else {},
+                        )
+                    )
+                    continue
                 message = str(item.get("msg") or item.get("message") or item.get("detail") or "Request validation failed")
                 source = item.get("loc")
                 source_path = ".".join(str(part) for part in source) if isinstance(source, (list, tuple)) else None
-                errors.append({"code": code, "message": message, **({"source": source_path} if source_path else {})})
+                details = {"source": source_path} if source_path else {}
+                errors.append(build_error_payload(code=code, message=message, details=details))
             else:
-                errors.append({"code": code, "message": str(item)})
+                errors.append(build_error_payload(code=code, message=str(item)))
         return errors
 
     if isinstance(detail, dict):
+        if "code" in detail and "message" in detail:
+            return [
+                build_error_payload(
+                    code=str(detail.get("code")),
+                    message=str(detail.get("message")),
+                    details=detail.get("details") if isinstance(detail.get("details"), dict) else {},
+                )
+            ]
         message = str(detail.get("message") or detail.get("detail") or "Request failed")
-        return [{"code": code, "message": message}]
+        details = detail.get("details") if isinstance(detail.get("details"), dict) else {}
+        return [build_error_payload(code=code, message=message, details=details)]
 
-    return [{"code": code, "message": str(detail)}]
+    return [build_error_payload(code=code, message=str(detail))]
 
 
 @app.exception_handler(HTTPException)
 async def canonical_http_exception_handler(request: Request, exc: HTTPException):
-    errors = _coerce_error_list(exc.detail, code="request_error")
-    status = "failed"
-    if exc.status_code in (401, 403):
-        status = "failed"
-        for item in errors:
-            item["code"] = "auth_error"
-    elif exc.status_code == 422:
-        status = "failed"
-        for item in errors:
-            item["code"] = "validation_error"
+    code = _error_code_for_status(exc.status_code)
+    errors = _coerce_error_list(exc.detail, code=code)
+    for item in errors:
+        item["code"] = code
+        item.setdefault("details", {})
+        item["details"].setdefault("statusCode", exc.status_code)
 
-    payload = build_canonical_crop_response(status=status, errors=errors)
+    payload = build_canonical_crop_response(status="failed", errors=errors)
     return JSONResponse(status_code=exc.status_code, content=payload)
 
 
@@ -1825,6 +1860,8 @@ from fastapi.exceptions import RequestValidationError
 @app.exception_handler(RequestValidationError)
 async def canonical_validation_exception_handler(request: Request, exc: RequestValidationError):
     errors = _coerce_error_list(exc.errors(), code="validation_error")
+    for item in errors:
+        item["details"].setdefault("statusCode", 422)
     payload = build_canonical_crop_response(status="failed", errors=errors)
     return JSONResponse(status_code=422, content=payload)
 
@@ -1998,7 +2035,14 @@ async def crop_endpoint(
             errors=[],
         )
     except RuntimeError as exc:
-        raise HTTPException(status_code=500, detail=str(exc)) from exc
+        raise HTTPException(
+            status_code=500,
+            detail=build_error_payload(
+                code="internal_error",
+                message="Cropping failed unexpectedly",
+                details={"reason": str(exc)},
+            ),
+        ) from exc
     finally:
         try:
             os.unlink(tmp.name)
@@ -2582,7 +2626,11 @@ async def crop_batch_endpoint(
                 }
             )
         except HTTPException as exc:
-            message = str(exc.detail)
+            error_code = _error_code_for_status(exc.status_code)
+            error_list = _coerce_error_list(exc.detail, code=error_code)
+            error_detail = error_list[0] if error_list else build_error_payload(code=error_code, message="Crop failed")
+            error_detail["code"] = error_code
+            error_detail["details"].update({"statusCode": exc.status_code, "sourceFilename": source_name})
             media_updates.append(
                 {
                     "mediaId": None,
@@ -2594,12 +2642,16 @@ async def crop_batch_endpoint(
                     "sourceFilename": source_name,
                     "idempotencyKey": None,
                     "mutationOutcome": "batch_crop",
-                    "error": {"code": "crop_failed", "message": message, "sourceFilename": source_name},
+                    "error": error_detail,
                 }
             )
-            errors.append({"code": "crop_failed", "message": message, "sourceFilename": source_name})
+            errors.append(error_detail)
         except Exception as exc:
-            message = str(exc)
+            error_detail = build_error_payload(
+                code="internal_error",
+                message="Unexpected crop failure",
+                details={"sourceFilename": source_name, "reason": str(exc)},
+            )
             media_updates.append(
                 {
                     "mediaId": None,
@@ -2611,10 +2663,10 @@ async def crop_batch_endpoint(
                     "sourceFilename": source_name,
                     "idempotencyKey": None,
                     "mutationOutcome": "batch_crop",
-                    "error": {"code": "crop_failed", "message": message, "sourceFilename": source_name},
+                    "error": error_detail,
                 }
             )
-            errors.append({"code": "crop_failed", "message": message, "sourceFilename": source_name})
+            errors.append(error_detail)
         finally:
             try:
                 os.unlink(tmp.name)
