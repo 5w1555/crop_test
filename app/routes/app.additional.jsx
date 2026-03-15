@@ -1325,7 +1325,8 @@ export default function CropImagePage() {
           });
           throw malformedError;
         }
-        isDone = jobStatus?.status === "done" || jobStatus?.status === "error";
+        isDone =
+          jobStatus?.status === "succeeded" || jobStatus?.status === "failed";
 
         if (!isDone) {
           pollDelayMs = Math.min(pollDelayMs * 2, pollDelayCapMs);

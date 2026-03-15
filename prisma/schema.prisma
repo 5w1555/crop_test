@@ -14,6 +14,13 @@ datasource db {
   directUrl = env("DIRECT_DATABASE_URL")
 }
 
+enum CropJobStatus {
+  pending
+  running
+  succeeded
+  failed
+}
+
 model Session {
   id            String    @id
   shop          String
@@ -40,4 +47,18 @@ model ShopPlanUsage {
   imagesProcessed Int      @default(0)
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
+}
+
+model CropJob {
+  id             String        @id
+  shop           String
+  status         CropJobStatus @default(pending)
+  error          String?
+  requestPayload Json?
+  resultPayload  Json?
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
+
+  @@index([shop, createdAt])
+  @@index([status, updatedAt])
 }
