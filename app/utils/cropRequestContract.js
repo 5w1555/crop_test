@@ -20,10 +20,36 @@ export function normalizePipeline(rawValue) {
   return "auto";
 }
 
+export function normalizePipelineStages(rawValue) {
+  const values = Array.isArray(rawValue)
+    ? rawValue
+    : String(rawValue || "")
+        .split(",")
+        .map((entry) => entry.trim())
+        .filter(Boolean);
+
+  const normalized = [];
+
+  for (const value of values) {
+    const stage = normalizePipeline(value);
+    if (!normalized.includes(stage)) {
+      normalized.push(stage);
+    }
+  }
+
+  return normalized.length ? normalized : ["auto"];
+}
+
 export function buildRouteCropRequestContract(formData) {
+  const pipeline = normalizePipeline(formData.get("pipeline"));
+  const pipelineStages = normalizePipelineStages(
+    formData.get("pipeline_stages") || pipeline,
+  );
+
   return {
     method: String(formData.get("method") || "auto"),
-    pipeline: normalizePipeline(formData.get("pipeline")),
+    pipeline: pipelineStages[0] || pipeline,
+    pipelineStages,
     optionValues: {
       targetAspectRatio: String(formData.get("target_aspect_ratio") || ""),
       marginTop: String(formData.get("margin_top") || ""),
