@@ -62,3 +62,20 @@ model CropJob {
   @@index([shop, createdAt])
   @@index([status, updatedAt])
 }
+
+model MediaWritebackIdempotency {
+  id                String   @id @default(cuid())
+  shop              String
+  sourceMediaId     String
+  cropParamsHash    String
+  idempotencyKey    String
+  status            String
+  destinationMediaId String?
+  updatedImageUrl   String?
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@unique([shop, sourceMediaId, cropParamsHash])
+  @@index([shop, createdAt])
+}
