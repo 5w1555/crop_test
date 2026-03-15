@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import {
   buildRouteCropRequestContract,
+  buildStoreUpdateResultContract,
   normalizePipeline,
   normalizePipelineStages,
 } from "./cropRequestContract.js";
@@ -66,4 +67,51 @@ test("buildRouteCropRequestContract normalizes unknown pipeline to auto", () => 
 test("normalizePipelineStages deduplicates and falls back to auto", () => {
   assert.deepEqual(normalizePipelineStages("face,face,legacy"), ["face", "auto"]);
   assert.deepEqual(normalizePipelineStages(""), ["auto"]);
+});
+
+test("buildStoreUpdateResultContract supports store-updated payloads", () => {
+  const payload = {
+    store_updated_results: [
+      {
+        media_id: "gid://shopify/MediaImage/1",
+        status: "success",
+        updated_image_url: "https://cdn.example.com/a.jpg",
+        admin_target_url: "https://admin.shopify.com/store/test/products/1",
+        source_filename: "a.jpg",
+      },
+      {
+        media_id: "gid://shopify/MediaImage/2",
+        status: "failed",
+        error: "Image update failed",
+        source_filename: "b.jpg",
+      },
+    ],
+  };
+
+  const result = buildStoreUpdateResultContract(payload, { files: [] });
+
+  assert.equal(result.mode, "store-updated");
+  assert.equal(result.mediaUpdates.length, 2);
+  assert.equal(result.cropSummary.successCount, 1);
+  assert.equal(result.cropSummary.failedCount, 1);
+  assert.deepEqual(result.cropSummary.failedFiles, ["b.jpg"]);
+});
+
+test("buildStoreUpdateResultContract provides legacy zip compatibility", () => {
+  const result = buildStoreUpdateResultContract(
+    {
+      downloadUrl: "https://files.example.com/cropped.zip",
+      filename: "cropped.zip",
+      expiresIn: 120,
+    },
+    {
+      files: [{ name: "first.jpg" }, { name: "second.jpg" }],
+    },
+  );
+
+  assert.equal(result.mode, "zip-compat");
+  assert.equal(result.mediaUpdates.length, 2);
+  assert.equal(result.mediaUpdates[0].status, "legacy_zip_only");
+  assert.equal(result.legacyZip.downloadUrl, "https://files.example.com/cropped.zip");
+  assert.equal(result.cropSummary.successCount, 2);
 });

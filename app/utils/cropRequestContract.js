@@ -62,3 +62,112 @@ export function buildRouteCropRequestContract(formData) {
     },
   };
 }
+
+function normalizeMediaUpdateStatus(rawStatus) {
+  const value = String(rawStatus || "").trim().toLowerCase();
+  if (!value) {
+    return "unknown";
+  }
+
+  if (["updated", "success", "ok", "completed"].includes(value)) {
+    return "updated";
+  }
+
+  if (["failed", "error"].includes(value)) {
+    return "failed";
+  }
+
+  return value;
+}
+
+function normalizeStoreUpdateResult(result, index, files) {
+  return {
+    mediaId:
+      result?.mediaId ||
+      result?.media_id ||
+      result?.shopifyMediaId ||
+      result?.shopify_media_id ||
+      null,
+    status: normalizeMediaUpdateStatus(result?.status),
+    updatedImageUrl:
+      result?.updatedImageUrl ||
+      result?.updated_image_url ||
+      result?.imageUrl ||
+      result?.image_url ||
+      null,
+    adminTargetUrl:
+      result?.adminTargetUrl ||
+      result?.admin_target_url ||
+      result?.mediaAdminUrl ||
+      result?.media_admin_url ||
+      result?.productAdminUrl ||
+      result?.product_admin_url ||
+      null,
+    sourceFilename:
+      result?.sourceFilename ||
+      result?.source_filename ||
+      result?.filename ||
+      files[index]?.name ||
+      `image-${index + 1}`,
+    error: result?.error || null,
+  };
+}
+
+export function buildStoreUpdateResultContract(payload, { files = [] } = {}) {
+  const candidateResults =
+    payload?.storeUpdatedResults ||
+    payload?.store_updated_results ||
+    payload?.updatedMedia ||
+    payload?.updated_media ||
+    payload?.mediaUpdates ||
+    payload?.media_updates ||
+    payload?.results;
+
+  if (Array.isArray(candidateResults) && candidateResults.length > 0) {
+    const mediaUpdates = candidateResults.map((result, index) =>
+      normalizeStoreUpdateResult(result, index, files),
+    );
+
+    const successCount = mediaUpdates.filter((result) => result.status === "updated").length;
+    const failedItems = mediaUpdates.filter((result) => result.status === "failed");
+
+    return {
+      mode: "store-updated",
+      mediaUpdates,
+      cropSummary: {
+        requestedCount: mediaUpdates.length,
+        successCount,
+        failedCount: failedItems.length,
+        failedFiles: failedItems.map((result) => result.sourceFilename),
+      },
+      legacyZip: null,
+    };
+  }
+
+  if (payload?.downloadUrl) {
+    return {
+      mode: "zip-compat",
+      mediaUpdates: files.map((file, index) => ({
+        mediaId: null,
+        status: "legacy_zip_only",
+        updatedImageUrl: null,
+        adminTargetUrl: null,
+        sourceFilename: file?.name || `image-${index + 1}`,
+        error: null,
+      })),
+      cropSummary: {
+        requestedCount: files.length,
+        successCount: files.length,
+        failedCount: 0,
+        failedFiles: [],
+      },
+      legacyZip: {
+        downloadUrl: payload.downloadUrl,
+        filename: payload.filename || "cropped_batch.zip",
+        expiresIn: payload.expiresIn || 600,
+      },
+    };
+  }
+
+  return null;
+}

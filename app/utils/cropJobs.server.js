@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 
 import { cropImages } from "./smartCropClient.js";
 import { commitPlanUsage } from "./plan.server.js";
+import { buildStoreUpdateResultContract } from "./cropRequestContract.js";
 
 const JOB_TTL_MS = 15 * 60 * 1000;
 
@@ -22,9 +23,7 @@ export function createCropJob({ shop, files, options, startedAt }) {
     status: "pending",
     startedAt,
     finishedAt: null,
-    downloadUrl: null,
-    filename: null,
-    expiresIn: null,
+    storeUpdateResult: null,
     cropSummary: null,
     error: null,
   });
@@ -44,8 +43,10 @@ async function runCropJob(jobId, { shop, files, options, startedAt }) {
     const elapsedMs = Date.now() - startedAt;
     const payload = await response.json();
 
-    if (!payload?.downloadUrl) {
-      throw new Error("Crop API response is missing downloadUrl.");
+    const storeUpdateResult = buildStoreUpdateResultContract(payload, { files });
+
+    if (!storeUpdateResult) {
+      throw new Error("Crop API response is missing store update results.");
     }
 
     await commitPlanUsage({
@@ -57,14 +58,9 @@ async function runCropJob(jobId, { shop, files, options, startedAt }) {
       ...job,
       status: "done",
       finishedAt: Date.now(),
-      downloadUrl: payload.downloadUrl,
-      filename: payload.filename || "cropped_batch.zip",
-      expiresIn: payload.expiresIn || 600,
+      storeUpdateResult,
       cropSummary: {
-        requestedCount: files.length,
-        successCount: files.length,
-        failedCount: 0,
-        failedFiles: [],
+        ...storeUpdateResult.cropSummary,
         elapsedSeconds: Number((elapsedMs / 1000).toFixed(2)),
       },
     });

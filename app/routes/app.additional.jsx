@@ -13,6 +13,7 @@ import { getBillingState } from "../utils/billing.server";
 import { PRO_PLAN } from "../utils/billing";
 import {
   buildRouteCropRequestContract,
+  buildStoreUpdateResultContract,
   normalizePipeline,
 } from "../utils/cropRequestContract.js";
 import {
@@ -1095,9 +1096,9 @@ export default function CropImagePage() {
   const [cropValidationError, setCropValidationError] = useState("");
   const [isCropPointerActive, setIsCropPointerActive] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
-  const [isSubmittingDownload, setIsSubmittingDownload] = useState(false);
-  const [downloadResult, setDownloadResult] = useState(null);
-  const [downloadUrl, setDownloadUrl] = useState("");
+  const [isSubmittingCrop, setIsSubmittingCrop] = useState(false);
+  const [storeUpdateResult, setStoreUpdateResult] = useState(null);
+  
   const [cropFailureSummary, setCropFailureSummary] = useState("");
   const [cropFailureDetails, setCropFailureDetails] = useState(null);
 
@@ -1299,7 +1300,7 @@ export default function CropImagePage() {
   useEffect(() => {
     if (
       typeof window === "undefined" ||
-      isSubmittingDownload ||
+      isSubmittingCrop ||
       !shopify ||
       typeof shopify.idToken !== "function"
     ) {
@@ -1314,9 +1315,8 @@ export default function CropImagePage() {
     let cancelled = false;
 
     const resumePendingCrop = async () => {
-      setIsSubmittingDownload(true);
-      setDownloadResult(null);
-      setDownloadUrl("");
+      setIsSubmittingCrop(true);
+      setStoreUpdateResult(null);
       const correlationId = generateCorrelationId();
       showToast("Resuming your previous crop job...");
       setCropFailureSummary("");
@@ -1328,14 +1328,24 @@ export default function CropImagePage() {
           return;
         }
 
-        if (!jobStatus?.downloadUrl) {
-          throw new Error(jobStatus?.error || "Crop finished without a download URL.");
+        const normalizedResult =
+          buildStoreUpdateResultContract(jobStatus?.storeUpdateResult, {
+            files: selectedUploadFiles,
+          }) ||
+          buildStoreUpdateResultContract(jobStatus, {
+            files: selectedUploadFiles,
+          });
+
+        if (!normalizedResult) {
+          throw new Error(jobStatus?.error || "Crop finished without store update results.");
         }
 
-        setDownloadUrl(jobStatus.downloadUrl);
-        setDownloadResult(jobStatus.cropSummary || null);
+        setStoreUpdateResult({
+          ...normalizedResult,
+          cropSummary: jobStatus?.cropSummary || normalizedResult.cropSummary,
+        });
 
-        showToast("Crop completed. Use the download link to save your ZIP file.");
+        showToast("Crop completed. Images were updated in your store.");
       } catch (error) {
         if (cancelled) {
           return;
@@ -1367,7 +1377,7 @@ export default function CropImagePage() {
         );
       } finally {
         if (!cancelled) {
-          setIsSubmittingDownload(false);
+          setIsSubmittingCrop(false);
         }
       }
     };
@@ -1379,8 +1389,9 @@ export default function CropImagePage() {
     };
   }, [
     getPendingJobId,
-    isSubmittingDownload,
+    isSubmittingCrop,
     pollCropJobStatus,
+    selectedUploadFiles,
     shopify,
     showToast,
   ]);
@@ -1898,7 +1909,7 @@ export default function CropImagePage() {
     setSelectedPipelineStages(getPipelineTemplateForPreset(selectedPreset));
   }, [selectedPreset]);
 
-  const handleDownloadSubmit = async (event) => {
+  const handleCropSubmit = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
 
@@ -1932,9 +1943,8 @@ export default function CropImagePage() {
     }
 
     setCropValidationError("");
-    setIsSubmittingDownload(true);
-    setDownloadResult(null);
-    setDownloadUrl("");
+    setIsSubmittingCrop(true);
+    setStoreUpdateResult(null);
     setCropFailureSummary("");
     setCropFailureDetails(null);
     showToast("Cropping started. Processing images...");
@@ -2040,16 +2050,26 @@ export default function CropImagePage() {
         correlationId,
       );
 
-      if (!jobStatus?.downloadUrl) {
-        throw new Error(jobStatus?.error || "Crop finished without a download URL.");
+      const normalizedResult =
+        buildStoreUpdateResultContract(jobStatus?.storeUpdateResult, {
+          files: selectedUploadFiles,
+        }) ||
+        buildStoreUpdateResultContract(jobStatus, {
+          files: selectedUploadFiles,
+        });
+
+      if (!normalizedResult) {
+        throw new Error(jobStatus?.error || "Crop finished without store update results.");
       }
 
-      setDownloadUrl(jobStatus.downloadUrl);
-      setDownloadResult(jobStatus.cropSummary || null);
+      setStoreUpdateResult({
+        ...normalizedResult,
+        cropSummary: jobStatus?.cropSummary || normalizedResult.cropSummary,
+      });
       setCropFailureSummary("");
       setCropFailureDetails(null);
 
-      showToast("Crop completed. Click Download ZIP to get your file.");
+      showToast("Crop completed. Images were updated in your store.");
     } catch (error) {
       const technicalDetails =
         error && typeof error === "object" && "technicalDetails" in error
@@ -2076,7 +2096,7 @@ export default function CropImagePage() {
         { isError: true },
       );
     } finally {
-      setIsSubmittingDownload(false);
+      setIsSubmittingCrop(false);
     }
   };
 
@@ -2250,7 +2270,7 @@ export default function CropImagePage() {
         <form
           method="post"
           encType="multipart/form-data"
-          onSubmit={handleDownloadSubmit}
+          onSubmit={handleCropSubmit}
         >
           <s-stack direction="block" gap="base">
             <label htmlFor="file">Image files</label>
@@ -2518,15 +2538,15 @@ export default function CropImagePage() {
               type="submit"
               disabled={
                 !hasValidSelection ||
-                isSubmittingDownload ||
+                isSubmittingCrop ||
                 isPlanBlockedByMethod
               }
-              {...(isSubmittingDownload ? { loading: true } : {})}
+              {...(isSubmittingCrop ? { loading: true } : {})}
             >
               Process images
             </s-button>
 
-            {isSubmittingDownload && <s-text>Processing images…</s-text>}
+            {isSubmittingCrop && <s-text>Processing and updating media…</s-text>}
             {cropFailureSummary && (
               <s-box
                 padding="base"
@@ -2548,36 +2568,53 @@ export default function CropImagePage() {
                 </s-stack>
               </s-box>
             )}
-            {downloadUrl && (
+            {storeUpdateResult && (
               <s-box padding="base" border="base" borderRadius="base">
                 <s-stack direction="block" gap="small">
-                  <s-text fontWeight="semibold">Download your images</s-text>
+                  <s-text fontWeight="semibold">Images updated in your Shopify store</s-text>
                   <s-text>
-                    Your files are ready in a ZIP file.
-                    {downloadResult?.elapsedSeconds !== null &&
-                    downloadResult?.elapsedSeconds !== undefined
-                      ? ` Processing time: ${downloadResult.elapsedSeconds}s.`
-                      : ""}
+                    {storeUpdateResult?.cropSummary?.elapsedSeconds !== null &&
+                    storeUpdateResult?.cropSummary?.elapsedSeconds !== undefined
+                      ? `Processing time: ${storeUpdateResult.cropSummary.elapsedSeconds}s.`
+                      : "Batch processing completed."}
                   </s-text>
                   <s-text>
-                    Processed: {downloadResult?.successCount ?? 0} successful
+                    Processed: {storeUpdateResult?.cropSummary?.successCount ?? 0} successful
                     {" · "}
-                    {downloadResult?.failedCount ?? 0} failed
+                    {storeUpdateResult?.cropSummary?.failedCount ?? 0} failed
                   </s-text>
-                  {(downloadResult?.failedFiles?.length || 0) > 0 && (
-                    <s-text tone="critical">
-                      Failed files: {downloadResult.failedFiles.join(", ")}
-                    </s-text>
+                  {storeUpdateResult?.mode === "zip-compat" && (
+                    <s-banner tone="warning">
+                      This result came from the legacy ZIP flow. Store media links are not available for this batch yet.
+                    </s-banner>
                   )}
-                  <s-link href={downloadUrl} target="_top" removeUnderline>
-                    Download ZIP file
-                  </s-link>
-                  <s-text tone="subdued">
-                    If your browser blocks downloads, open this link in a new tab:
-                  </s-text>
-                  <s-link href={downloadUrl} target="_blank">
-                    {downloadUrl}
-                  </s-link>
+                  <s-stack direction="block" gap="tight">
+                    {(storeUpdateResult?.mediaUpdates || []).map((mediaResult, index) => (
+                      <s-box key={`${mediaResult.mediaId || mediaResult.sourceFilename || "media"}-${index}`} padding="small" border="base" borderRadius="small">
+                        <s-stack direction="block" gap="tight">
+                          <s-text>
+                            {mediaResult.sourceFilename || `Image ${index + 1}`} — {mediaResult.status === "updated" ? "Updated" : "Not updated"}
+                          </s-text>
+                          {mediaResult.mediaId && (
+                            <s-text tone="subdued">Media ID: {mediaResult.mediaId}</s-text>
+                          )}
+                          {mediaResult.updatedImageUrl && (
+                            <s-link href={mediaResult.updatedImageUrl} target="_blank">
+                              View updated image URL
+                            </s-link>
+                          )}
+                          {mediaResult.adminTargetUrl && (
+                            <s-link href={mediaResult.adminTargetUrl} target="_top" removeUnderline>
+                              Open in Shopify admin
+                            </s-link>
+                          )}
+                          {mediaResult.error && (
+                            <s-text tone="critical">Error: {mediaResult.error}</s-text>
+                          )}
+                        </s-stack>
+                      </s-box>
+                    ))}
+                  </s-stack>
                 </s-stack>
               </s-box>
             )}
@@ -2707,8 +2744,7 @@ export default function CropImagePage() {
             Reset selection
           </s-button>
           <s-text tone="subdued">
-            Downloads use a generated link once the batch ZIP has been fully
-            prepared.
+            Processed images are updated directly in your Shopify media library.
           </s-text>
         </s-stack>
       </s-section>
