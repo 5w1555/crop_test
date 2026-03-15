@@ -117,6 +117,7 @@ export const action = async ({ request }) => {
   const formData = await request.formData();
   const files = formData.getAll("file");
   const selectedMediaIds = formData.getAll("selected_media_id").map((value) => String(value || "").trim()).filter(Boolean);
+  const selectedProductIds = formData.getAll("selected_product_id").map((value) => String(value || "").trim()).filter(Boolean);
 
   if (!selectedMediaIds.length && !files.length) {
     return jsonError("Please select at least one Shopify media item or upload an image.");
@@ -124,7 +125,11 @@ export const action = async ({ request }) => {
 
   let resolvedMedia = [];
   if (selectedMediaIds.length) {
-    const mediaResult = await resolveSelectedMedia({ admin, mediaIds: selectedMediaIds });
+    const mediaResult = await resolveSelectedMedia({
+      admin,
+      mediaIds: selectedMediaIds,
+      productIds: selectedProductIds,
+    });
     if (mediaResult.invalidMediaIds.length) {
       return jsonError("Some selected media items are unavailable or do not belong to this shop.", 403, { invalidMediaIds: mediaResult.invalidMediaIds });
     }

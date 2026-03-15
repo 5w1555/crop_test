@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 
 import { resolveSelectedMedia } from "./shopifyMedia.server.js";
 
-test("resolveSelectedMedia handles direct media IDs", async () => {
+test("resolveSelectedMedia resolves media IDs through selected products", async () => {
   const graphqlCalls = [];
   const admin = {
     graphql: async (_query, { variables }) => {
@@ -15,10 +15,19 @@ test("resolveSelectedMedia handles direct media IDs", async () => {
               {
                 __typename: "MediaImage",
                 id: "gid://shopify/MediaImage/10",
-                image: { url: "https://cdn.example.com/10.jpg" },
-                product: {
-                  id: "gid://shopify/Product/1",
-                  title: "Hat",
+              },
+              {
+                __typename: "Product",
+                id: "gid://shopify/Product/1",
+                title: "Hat",
+                media: {
+                  nodes: [
+                    {
+                      __typename: "MediaImage",
+                      id: "gid://shopify/MediaImage/10",
+                      image: { url: "https://cdn.example.com/10.jpg" },
+                    },
+                  ],
                 },
               },
             ],
@@ -31,9 +40,10 @@ test("resolveSelectedMedia handles direct media IDs", async () => {
   const resolved = await resolveSelectedMedia({
     admin,
     mediaIds: ["gid://shopify/MediaImage/10"],
+    productIds: ["gid://shopify/Product/1"],
   });
 
-  assert.deepEqual(graphqlCalls, [["gid://shopify/MediaImage/10"]]);
+  assert.deepEqual(graphqlCalls, [["gid://shopify/MediaImage/10", "gid://shopify/Product/1"]]);
   assert.deepEqual(resolved.invalidMediaIds, []);
   assert.deepEqual(resolved.media, [
     {
@@ -90,4 +100,26 @@ test("resolveSelectedMedia expands product selections into media images", async 
       productTitle: "Shirt",
     },
   ]);
+});
+
+
+test("resolveSelectedMedia marks direct media IDs invalid without selected products", async () => {
+  const admin = {
+    graphql: async () => ({
+      json: async () => ({
+        data: {
+          nodes: [null],
+        },
+      }),
+    }),
+  };
+
+  const resolved = await resolveSelectedMedia({
+    admin,
+    mediaIds: ["gid://shopify/MediaImage/404"],
+    productIds: [],
+  });
+
+  assert.deepEqual(resolved.media, []);
+  assert.deepEqual(resolved.invalidMediaIds, ["gid://shopify/MediaImage/404"]);
 });

@@ -1737,6 +1737,7 @@ export default function CropPage() {
       });
       selectedShopifyMedia.forEach((media) => {
         formData.append("selected_media_id", media.mediaId || "");
+        formData.append("selected_product_id", media.productId || "");
         formData.append("selected_media_source", media.sourceUrl || "");
       });
       formData.set("method", selectedMethod);
