@@ -12,6 +12,21 @@ const SHOPIFY_MEDIA_QUERY = `#graphql
   query ResolveSelectedMedia($ids: [ID!]!) {
     nodes(ids: $ids) {
       __typename
+      ... on Product {
+        id
+        title
+        media(first: 250) {
+          nodes {
+            __typename
+            ... on MediaImage {
+              id
+              image {
+                url
+              }
+            }
+          }
+        }
+      }
       ... on MediaImage {
         id
         image {
@@ -26,9 +41,12 @@ const SHOPIFY_MEDIA_QUERY = `#graphql
   }
 `;
 
-export async function resolveSelectedMedia({ admin, mediaIds }) {
+export async function resolveSelectedMedia({ admin, mediaIds, productIds }) {
   const normalizedMediaIds = normalizeMediaIds(mediaIds);
-  if (!normalizedMediaIds.length) {
+  const normalizedProductIds = normalizeMediaIds(productIds);
+  const queryIds = normalizeMediaIds([...normalizedMediaIds, ...normalizedProductIds]);
+
+  if (!queryIds.length) {
     return {
       media: [],
       invalidMediaIds: [],
@@ -36,31 +54,66 @@ export async function resolveSelectedMedia({ admin, mediaIds }) {
   }
 
   const response = await admin.graphql(SHOPIFY_MEDIA_QUERY, {
-    variables: { ids: normalizedMediaIds },
+    variables: { ids: queryIds },
   });
   const payload = await response.json();
   const nodes = Array.isArray(payload?.data?.nodes) ? payload.data.nodes : [];
+  const nodesById = new Map();
+  queryIds.forEach((id, index) => {
+    nodesById.set(id, nodes[index] || null);
+  });
 
   const media = [];
   const invalidMediaIds = [];
+  const seenMediaIds = new Set();
 
-  normalizedMediaIds.forEach((mediaId, index) => {
-    const node = nodes[index];
+  const appendMediaNode = (node, fallbackProduct) => {
     if (
       !node ||
       node.__typename !== "MediaImage" ||
-      !node.image?.url ||
-      !node.product?.id
+      !node.id ||
+      !node.image?.url
     ) {
-      invalidMediaIds.push(mediaId);
-      return;
+      return false;
     }
 
+    if (seenMediaIds.has(node.id)) {
+      return true;
+    }
+
+    const productId = fallbackProduct?.id || node.product?.id;
+    if (!productId) {
+      return false;
+    }
+
+    seenMediaIds.add(node.id);
     media.push({
       mediaId: node.id,
       sourceUrl: node.image.url,
-      productId: node.product.id,
-      productTitle: node.product.title || "",
+      productId,
+      productTitle: fallbackProduct?.title || node.product?.title || "",
+    });
+    return true;
+  };
+
+  normalizedMediaIds.forEach((mediaId) => {
+    const node = nodesById.get(mediaId);
+    if (!appendMediaNode(node, null)) {
+      invalidMediaIds.push(mediaId);
+    }
+  });
+
+  normalizedProductIds.forEach((productId) => {
+    const node = nodesById.get(productId);
+    if (node?.__typename !== "Product") {
+      return;
+    }
+
+    const productMediaNodes = Array.isArray(node?.media?.nodes)
+      ? node.media.nodes
+      : [];
+    productMediaNodes.forEach((mediaNode) => {
+      appendMediaNode(mediaNode, { id: node.id, title: node.title || "" });
     });
   });
 
