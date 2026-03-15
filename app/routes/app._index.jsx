@@ -11,8 +11,9 @@ export default function Index() {
     <s-page heading="Smart Crop app home">
       <s-section heading="Start with Crop Image">
         <s-paragraph>
-          Use <s-link href="/app/additional">Crop Image</s-link> to upload a
-          file, run Smart Crop, and update the existing Shopify media in place.
+          Use <s-link href="/app/additional">Crop Image</s-link> to choose media
+          from your Shopify library, crop it, and save the updated media directly
+          back to your store.
         </s-paragraph>
       </s-section>
 

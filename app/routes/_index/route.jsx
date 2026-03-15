@@ -18,20 +18,21 @@ export default function App() {
   return (
     <div className={styles.index}>
       <div className={styles.content}>
-        <p className={styles.kicker}>Shopify app for product-image workflows</p>
-        <h1 className={styles.heading}>SmartCrop automatically prepares cleaner product crops</h1>
+        <p className={styles.kicker}>Shopify app for direct media crop workflows</p>
+        <h1 className={styles.heading}>Select Shopify media, crop confidently, and save back to your store</h1>
         <p className={styles.text}>
-          SmartCrop helps Shopify teams upload one or more images, apply consistent cropping,
-          and apply consistent crops directly to product media without manual re-uploads.
+          SmartCrop helps Shopify teams choose existing media from the Shopify library,
+          crop with consistent framing, and save updates directly to store media without
+          manual export/import loops.
         </p>
 
         <div className={styles.grid}>
           <section className={styles.card}>
             <h2>What SmartCrop does</h2>
             <ul>
-              <li>Runs content-aware cropping for reliable framing across large batches.</li>
+              <li>Selects existing Shopify media and runs content-aware cropping with reliable framing.</li>
               <li>Supports advanced face-detection crop methods for portrait-heavy catalogs.</li>
-              <li>Updates Shopify media in place so teams can publish faster without download/re-upload steps.</li>
+              <li>Saves the cropped result directly to Shopify media so teams can publish faster.</li>
             </ul>
           </section>
 
@@ -74,8 +75,8 @@ export default function App() {
         )}
 
         <p className={styles.nextStep}>
-          Next: open <strong>Crop Images</strong> in <code>/app/additional</code> to upload files,
-          run SmartCrop, and review updates in Shopify admin.
+          Next: open <strong>Crop Images</strong> in <code>/app/additional</code> to select media
+          from Shopify, crop, and save updates directly to your store.
         </p>
       </div>
     </div>

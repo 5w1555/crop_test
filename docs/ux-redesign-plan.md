@@ -5,8 +5,12 @@ Ship an opinionated Smart Crop experience that is easy to trust on first run, wh
 
 ## Product model
 
+## UX flow note
+- Primary happy path: **library select → crop → media updated**.
+- File upload/download paths are legacy and should be treated as fallback-only experiences.
+
 ### Layer 1 — Zero friction (default)
-- Default path is upload + one primary action.
+- Default path is library select + one primary action.
 - Auto method is selected automatically.
 - Merchant can run batch processing without understanding crop internals.
 
