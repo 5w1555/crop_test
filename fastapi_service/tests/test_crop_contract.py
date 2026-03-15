@@ -548,3 +548,206 @@ def test_crop_contract_validation_failure(fastapi_main_module):
     payload = json.loads(response.body)
     assert payload["status"] == "failed"
     assert payload["errors"][0]["message"]
+
+
+def test_error_payload_schema_for_auth_and_validation_errors(fastapi_main_module):
+    import asyncio
+
+    request = fastapi_main_module.Request({"type": "http", "method": "POST", "path": "/crop/batch", "headers": []})
+
+    auth_exc = HTTPException(status_code=401, detail="Missing X-SmartCrop-Token header")
+    auth_response = asyncio.run(fastapi_main_module.canonical_http_exception_handler(request, auth_exc))
+    auth_payload = json.loads(auth_response.body)
+
+    assert auth_response.status_code == 401
+    assert auth_payload["errors"][0] == {
+        "code": "auth_error",
+        "message": "Missing X-SmartCrop-Token header",
+        "details": {"statusCode": 401},
+    }
+
+    validation_exc = HTTPException(status_code=413, detail="Too many files")
+    validation_response = asyncio.run(fastapi_main_module.canonical_http_exception_handler(request, validation_exc))
+    validation_payload = json.loads(validation_response.body)
+
+    assert validation_response.status_code == 413
+    assert validation_payload["errors"][0] == {
+        "code": "validation_error",
+        "message": "Too many files",
+        "details": {"statusCode": 413},
+    }
+
+
+def test_error_payload_schema_for_resource_error(fastapi_main_module):
+    import asyncio
+
+    request = fastapi_main_module.Request({"type": "http", "method": "POST", "path": "/crop/batch", "headers": []})
+    exc = HTTPException(status_code=503, detail="Smart Crop API is busy. Please retry shortly.")
+
+    response = asyncio.run(fastapi_main_module.canonical_http_exception_handler(request, exc))
+    payload = json.loads(response.body)
+
+    assert response.status_code == 503
+    assert payload["errors"][0] == {
+        "code": "resource_error",
+        "message": "Smart Crop API is busy. Please retry shortly.",
+        "details": {"statusCode": 503},
+    }
+
+
+def test_crop_batch_preserves_http_exception_status_in_error_details(monkeypatch, fastapi_main_module):
+    from starlette.datastructures import Headers, UploadFile
+    import asyncio
+
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "run_crop_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(HTTPException(status_code=400, detail="Unknown method")),
+    )
+
+    upload = UploadFile(
+        file=io.BytesIO(_make_png_bytes()),
+        filename="bad.png",
+        headers=Headers({"content-type": "image/png"}),
+    )
+
+    payload = asyncio.run(
+        fastapi_main_module.crop_batch_endpoint(
+            files=[upload],
+            file=None,
+            pipeline="auto",
+            method="auto",
+            target_aspect_ratio=None,
+            margin_top=None,
+            margin_right=None,
+            margin_bottom=None,
+            margin_left=None,
+            anchor_hint=None,
+            crop_coordinates=None,
+            filters=None,
+            _=None,
+        )
+    )
+
+    assert payload["status"] == "failed"
+    assert payload["errors"][0] == {
+        "code": "validation_error",
+        "message": "Unknown method",
+        "details": {"statusCode": 400, "sourceFilename": "bad.png"},
+    }
+
+
+def test_crop_batch_maps_unexpected_exception_to_stable_internal_error(monkeypatch, fastapi_main_module):
+    from starlette.datastructures import Headers, UploadFile
+    import asyncio
+
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "run_crop_pipeline",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("kaboom")),
+    )
+
+    upload = UploadFile(
+        file=io.BytesIO(_make_png_bytes()),
+        filename="explode.png",
+        headers=Headers({"content-type": "image/png"}),
+    )
+
+    payload = asyncio.run(
+        fastapi_main_module.crop_batch_endpoint(
+            files=[upload],
+            file=None,
+            pipeline="auto",
+            method="auto",
+            target_aspect_ratio=None,
+            margin_top=None,
+            margin_right=None,
+            margin_bottom=None,
+            margin_left=None,
+            anchor_hint=None,
+            crop_coordinates=None,
+            filters=None,
+            _=None,
+        )
+    )
+
+    assert payload["status"] == "failed"
+    assert payload["errors"][0] == {
+        "code": "internal_error",
+        "message": "Unexpected crop failure",
+        "details": {"sourceFilename": "explode.png", "reason": "kaboom"},
+    }
+
+
+def test_crop_batch_endpoint_exact_http_status_codes_for_request_failures(fastapi_main_module):
+    import asyncio
+
+    request = fastapi_main_module.Request({"type": "http", "method": "POST", "path": "/crop/batch", "headers": []})
+
+    with pytest.raises(HTTPException) as no_file_exc:
+        asyncio.run(
+            fastapi_main_module.crop_batch_endpoint(
+                files=None,
+                file=None,
+                pipeline="auto",
+                method="auto",
+                target_aspect_ratio=None,
+                margin_top=None,
+                margin_right=None,
+                margin_bottom=None,
+                margin_left=None,
+                anchor_hint=None,
+                crop_coordinates=None,
+                filters=None,
+                _=None,
+            )
+        )
+
+    no_file_response = asyncio.run(
+        fastapi_main_module.canonical_http_exception_handler(request, no_file_exc.value)
+    )
+    assert no_file_response.status_code == 400
+    assert json.loads(no_file_response.body)["errors"][0] == {
+        "code": "validation_error",
+        "message": "No files uploaded",
+        "details": {"statusCode": 400},
+    }
+
+    from starlette.datastructures import Headers, UploadFile
+
+    uploads = [
+        UploadFile(file=io.BytesIO(_make_png_bytes()), filename="one.png", headers=Headers({"content-type": "image/png"})),
+        UploadFile(file=io.BytesIO(_make_png_bytes()), filename="two.png", headers=Headers({"content-type": "image/png"})),
+    ]
+
+    original_max = fastapi_main_module.MAX_BATCH_FILES
+    try:
+        fastapi_main_module.MAX_BATCH_FILES = 1
+        with pytest.raises(HTTPException) as too_many_exc:
+            asyncio.run(
+                fastapi_main_module.crop_batch_endpoint(
+                    files=uploads,
+                    file=None,
+                    pipeline="auto",
+                    method="auto",
+                    target_aspect_ratio=None,
+                    margin_top=None,
+                    margin_right=None,
+                    margin_bottom=None,
+                    margin_left=None,
+                    anchor_hint=None,
+                    crop_coordinates=None,
+                    filters=None,
+                    _=None,
+                )
+            )
+    finally:
+        fastapi_main_module.MAX_BATCH_FILES = original_max
+
+    too_many_response = asyncio.run(
+        fastapi_main_module.canonical_http_exception_handler(request, too_many_exc.value)
+    )
+    assert too_many_response.status_code == 413
+    too_many_payload = json.loads(too_many_response.body)
+    assert too_many_payload["errors"][0]["code"] == "validation_error"
+    assert too_many_payload["errors"][0]["details"] == {"statusCode": 413}
