@@ -1096,8 +1096,10 @@ export const action = async ({ request }) => {
 
   const jobId = await createCropJob({
     shop: session.shop,
+    admin,
     files: filesForCrop,
     startedAt,
+    mediaTargets: resolvedMedia,
     options: {
       method: planReservation.effectiveMethod,
       pipeline,
@@ -2756,6 +2758,20 @@ export default function CropImagePage() {
                           </s-text>
                           {mediaResult.mediaId && (
                             <s-text tone="subdued">Media ID: {mediaResult.mediaId}</s-text>
+                          )}
+                          {mediaResult.sourceMediaId && (
+                            <s-text tone="subdued">Source media: {mediaResult.sourceMediaId}</s-text>
+                          )}
+                          {mediaResult.destinationMediaId && (
+                            <s-text tone="subdued">
+                              Destination media: {mediaResult.destinationMediaId}
+                            </s-text>
+                          )}
+                          {mediaResult.mutationOutcome && (
+                            <s-text tone="subdued">Mutation: {mediaResult.mutationOutcome}</s-text>
+                          )}
+                          {mediaResult.idempotencyKey && (
+                            <s-text tone="subdued">Idempotency key: {mediaResult.idempotencyKey}</s-text>
                           )}
                           {mediaResult.updatedImageUrl && (
                             <s-link href={mediaResult.updatedImageUrl} target="_blank">
