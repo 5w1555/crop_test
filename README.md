@@ -181,7 +181,9 @@ This guarantees migrations are applied before serving traffic.
 >
 > `SMARTCROP_API_TOKEN` must match across both services. FastAPI rejects missing tokens with `401` and invalid tokens with `403` on `/crop` and `/crop/batch`.
 >
-> Batch ZIP downloads are now served directly by FastAPI from temporary storage under `/tmp`, with expiring local download URLs and no external object storage configuration required.
+> Primary behavior is direct Shopify media updates: merchants select media in-app, run Smart Crop, and the app writes cropped output back to the same store media records (no ZIP handoff required).
+>
+> Fallback behavior is available for constrained cases (for example, API permission issues or temporary write failures): Smart Crop can still return processed image bytes for preview and manual replacement workflows while store write access is restored.
 
 ### Smart Crop shared-secret rotation and rollback
 
@@ -190,7 +192,7 @@ Use this procedure when rotating `SMARTCROP_API_TOKEN`:
 1. Generate a new high-entropy token (for example from your password manager).
 2. Update `SMARTCROP_API_TOKEN` on the **FastAPI service** in Render and deploy.
 3. Update `SMARTCROP_API_TOKEN` on the **Node app service** in Render and deploy.
-4. Verify uploads from the app succeed (single + batch crop).
+4. Verify Smart Crop requests from the app succeed for direct store updates (single + batch selections).
 
 Rollback steps (if crop requests fail after rotation):
 
@@ -342,10 +344,11 @@ After merging major changes, validate both app layers:
 
 1. **Embedded app auth flow**: install app in a dev store and confirm OAuth/login still works.
 2. **Smart Crop API connectivity**: open **Additional** page and confirm status shows connected when `SMARTCROP_API_URL` is valid.
-3. **Crop methods matrix**: upload at least one image and verify each method (`auto`, `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`) returns an image without server error.
+3. **Crop methods matrix**: select at least one media item from Shopify and verify each method (`auto`, `head_bust`, `frontal`, `profile`, `chin`, `nose`, `below_lips`) completes without server error.
 4. **Validation errors**: submit with missing/invalid file and confirm the UI shows an error banner/toast.
-5. **Output verification**: ensure returned image preview renders and download link saves a valid PNG.
-6. **Webhook/session regression**: reinstall/uninstall app once to confirm webhook handling and session persistence are unaffected.
+5. **Store update verification**: confirm the cropped preview renders and the selected Shopify media is updated in place after save.
+6. **Fallback verification**: simulate or use a constrained-write scenario and confirm the app still shows processed output for manual replacement.
+7. **Webhook/session regression**: reinstall/uninstall app once to confirm webhook handling and session persistence are unaffected.
 
 ### FastAPI smoke checks
 
