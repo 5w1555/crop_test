@@ -10,6 +10,10 @@ import {
 } from "../utils/plan.server.js";
 import { createCropJob } from "../utils/cropJobs.server.js";
 import { getBillingState } from "../utils/billing.server";
+import {
+  buildFilesFromMediaSources,
+  resolveSelectedMedia,
+} from "../utils/shopifyMedia.server";
 import { PRO_PLAN } from "../utils/billing";
 import {
   buildRouteCropRequestContract,
@@ -1017,15 +1021,40 @@ export const loader = async ({ request }) => {
 };
 
 export const action = async ({ request }) => {
-  const { session, billing } = await authenticate.admin(request);
+  const { session, billing, admin } = await authenticate.admin(request);
   const startedAt = Date.now();
-
   const formData = await request.formData();
   const files = formData.getAll("file");
+  const rawSelectedMediaIds = formData.getAll("selected_media_id");
+  const selectedMediaIds = rawSelectedMediaIds
+    .map((value) => String(value || "").trim())
+    .filter(Boolean);
+  const hasSelectedMedia = selectedMediaIds.length > 0;
+  const hasUploadedFiles = files.length > 0;
 
-  if (!files.length) {
-    return jsonError("Please upload at least one image.");
+  if (!hasSelectedMedia && !hasUploadedFiles) {
+    return jsonError("Please select at least one Shopify media item or upload an image.");
   }
+
+  let resolvedMedia = [];
+  if (hasSelectedMedia) {
+    const mediaResult = await resolveSelectedMedia({
+      admin,
+      mediaIds: selectedMediaIds,
+    });
+
+    if (mediaResult.invalidMediaIds.length) {
+      return jsonError(
+        "Some selected media items are unavailable or do not belong to this shop.",
+        403,
+        { invalidMediaIds: mediaResult.invalidMediaIds },
+      );
+    }
+
+    resolvedMedia = mediaResult.media;
+  }
+
+  const uploadedFiles = [];
 
   for (const file of files) {
     const fileError = validateImageFile(file);
@@ -1034,7 +1063,16 @@ export const action = async ({ request }) => {
         `${file instanceof File ? file.name : "File"}: ${fileError}`,
       );
     }
+
+    uploadedFiles.push(file);
   }
+
+  let mediaSourceFiles = [];
+  if (resolvedMedia.length) {
+    mediaSourceFiles = await buildFilesFromMediaSources(resolvedMedia);
+  }
+
+  const filesForCrop = mediaSourceFiles.length ? mediaSourceFiles : uploadedFiles;
 
   const { method, pipeline, optionValues } =
     buildRouteCropRequestContract(formData);
@@ -1047,7 +1085,7 @@ export const action = async ({ request }) => {
   const billingState = await getBillingState({ billing });
   const planReservation = await reservePlanCapacity({
     shop: session.shop,
-    imageCount: files.length,
+    imageCount: filesForCrop.length,
     method,
     hasActiveProPlan: billingState.hasActivePayment,
   });
@@ -1058,7 +1096,7 @@ export const action = async ({ request }) => {
 
   const jobId = await createCropJob({
     shop: session.shop,
-    files,
+    files: filesForCrop,
     startedAt,
     options: {
       method: planReservation.effectiveMethod,
@@ -1081,6 +1119,7 @@ export default function CropImagePage() {
   const preferencesHydratedRef = useRef(false);
   const [fileError, setFileError] = useState("");
   const [selectedUploadFiles, setSelectedUploadFiles] = useState([]);
+  const [selectedShopifyMedia, setSelectedShopifyMedia] = useState([]);
   const [selectedFiles, setSelectedFiles] = useState([]);
   const [previewFile, setPreviewFile] = useState(null);
   const [previewDimensions, setPreviewDimensions] = useState({
@@ -1330,10 +1369,10 @@ export default function CropImagePage() {
 
         const normalizedResult =
           buildStoreUpdateResultContract(jobStatus?.storeUpdateResult, {
-            files: selectedUploadFiles,
+            files: selectedFiles,
           }) ||
           buildStoreUpdateResultContract(jobStatus, {
-            files: selectedUploadFiles,
+            files: selectedFiles,
           });
 
         if (!normalizedResult) {
@@ -1391,7 +1430,7 @@ export default function CropImagePage() {
     getPendingJobId,
     isSubmittingCrop,
     pollCropJobStatus,
-    selectedUploadFiles,
+    selectedFiles,
     shopify,
     showToast,
   ]);
@@ -1451,14 +1490,114 @@ export default function CropImagePage() {
     }
 
     setSelectedUploadFiles(nextFiles);
+    setSelectedShopifyMedia([]);
     setSelectedFiles(
       nextFiles.map((file) => ({
         name: file.name,
         mimeType: file.type,
         sizeBytes: file.size,
+        source: "upload",
       })),
     );
   };
+
+  const handleMediaPicker = useCallback(async () => {
+    if (!shopify) {
+      showToast("Shopify App Bridge is unavailable.", { isError: true });
+      return;
+    }
+
+    try {
+      let pickerResult = [];
+      if (typeof shopify.mediaPicker === "function") {
+        pickerResult = await shopify.mediaPicker({
+          allowMultiple: true,
+          type: ["image"],
+        });
+      } else if (typeof shopify.resourcePicker === "function") {
+        pickerResult = await shopify.resourcePicker({
+          type: "product",
+          action: "select",
+          multiple: true,
+        });
+      }
+
+      const pickedItems = Array.isArray(pickerResult)
+        ? pickerResult
+        : Array.isArray(pickerResult?.selection)
+          ? pickerResult.selection
+          : [];
+
+      const mediaIds = [];
+      pickedItems.forEach((item) => {
+        if (item?.id && String(item.id).includes("MediaImage")) {
+          mediaIds.push(String(item.id));
+          return;
+        }
+
+        if (Array.isArray(item?.media)) {
+          item.media.forEach((media) => {
+            if (media?.id && String(media.id).includes("MediaImage")) {
+              mediaIds.push(String(media.id));
+            }
+          });
+        }
+      });
+
+      if (!mediaIds.length) {
+        showToast("No images selected.");
+        return;
+      }
+
+      const idToken = await shopify.idToken();
+      const response = await fetch(
+        `${appOrigin}/app/additional/media/resolve${buildEmbeddedRequestQueryString(
+          typeof window === "undefined" ? "" : window.location.search,
+          idToken,
+        )}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${idToken}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ mediaIds }),
+        },
+      );
+
+      const payload = await response.json();
+      if (!response.ok) {
+        showToast(payload?.error || "Unable to resolve selected media.", {
+          isError: true,
+        });
+        return;
+      }
+
+      const resolvedMedia = Array.isArray(payload?.media) ? payload.media : [];
+      setSelectedShopifyMedia(resolvedMedia);
+      setSelectedUploadFiles([]);
+      setFileError("");
+      setSelectedFiles(
+        resolvedMedia.map((media) => ({
+          name: media.sourceUrl,
+          mediaId: media.mediaId,
+          source: "shopify",
+        })),
+      );
+
+      if (resolvedMedia[0]?.sourceUrl) {
+        setPreviewFile({
+          name: resolvedMedia[0].sourceUrl,
+          src: resolvedMedia[0].sourceUrl,
+        });
+      }
+    } catch (error) {
+      showToast(
+        error instanceof Error ? error.message : "Failed to open media picker.",
+        { isError: true },
+      );
+    }
+  }, [appOrigin, shopify, showToast]);
 
   const hasValidSelection = selectedFiles.length > 0 && !fileError;
   const selectedPresetConfig =
@@ -1959,6 +2098,10 @@ export default function CropImagePage() {
       selectedUploadFiles.forEach((file) => {
         formData.append("file", file, file.name || "upload");
       });
+      selectedShopifyMedia.forEach((media) => {
+        formData.append("selected_media_id", media.mediaId || "");
+        formData.append("selected_media_source", media.sourceUrl || "");
+      });
       formData.set("method", selectedMethod);
       formData.set("pipeline", selectedPipeline);
       formData.set(
@@ -2052,10 +2195,10 @@ export default function CropImagePage() {
 
       const normalizedResult =
         buildStoreUpdateResultContract(jobStatus?.storeUpdateResult, {
-          files: selectedUploadFiles,
+          files: selectedFiles,
         }) ||
         buildStoreUpdateResultContract(jobStatus, {
-          files: selectedUploadFiles,
+          files: selectedFiles,
         });
 
       if (!normalizedResult) {
@@ -2263,7 +2406,7 @@ export default function CropImagePage() {
 
       <s-section heading="Layer 1 — Zero friction">
         <s-paragraph>
-          Drop images and run Smart Crop. For most stores, the default preset
+          Select Shopify media and run Smart Crop. For most stores, the default preset
           handles the batch without extra setup.
         </s-paragraph>
 
@@ -2273,60 +2416,76 @@ export default function CropImagePage() {
           onSubmit={handleCropSubmit}
         >
           <s-stack direction="block" gap="base">
-            <label htmlFor="file">Image files</label>
-            <s-box
-              padding="base"
-              border="base"
-              borderRadius="base"
-              background={isDragActive ? "bg-fill-brand" : "bg-fill"}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setIsDragActive(true);
-              }}
-              onDragLeave={(event) => {
-                event.preventDefault();
-                setIsDragActive(false);
-              }}
-              onDrop={(event) => {
-                event.preventDefault();
-                setIsDragActive(false);
-
-                const nextFiles = Array.from(event.dataTransfer.files ?? []);
-                if (!nextFiles.length) return;
-
-                if (inputRef.current) {
-                  try {
-                    const dataTransfer = new DataTransfer();
-                    nextFiles.forEach((file) => dataTransfer.items.add(file));
-                    inputRef.current.files = dataTransfer.files;
-                  } catch {
-                    // Some embedded browser contexts disallow setting input.files.
-                  }
-                }
-
-                syncSelectedFiles(nextFiles);
-              }}
-            >
+            <s-box padding="base" border="base" borderRadius="base">
               <s-stack direction="block" gap="small">
-                <s-text>Drag and drop one or more images here</s-text>
-                <s-text tone="subdued">or use the picker below</s-text>
-                <input
-                  id="file"
-                  name="file"
-                  ref={inputRef}
-                  type="file"
-                  multiple
-                  accept="image/*"
-                  required
-                  onChange={(event) => {
-                    const nextFiles = Array.from(
-                      event.currentTarget.files ?? [],
-                    );
-                    syncSelectedFiles(nextFiles);
-                  }}
-                />
+                <s-text fontWeight="semibold">Select Shopify media (recommended)</s-text>
+                <s-text tone="subdued">
+                  Use Shopify picker APIs to choose existing product media as the primary source.
+                </s-text>
+                <s-button variant="primary" type="button" onClick={handleMediaPicker}>
+                  Select from Shopify media
+                </s-button>
+                {!!selectedShopifyMedia.length && (
+                  <s-text tone="subdued">{selectedShopifyMedia.length} Shopify media items selected.</s-text>
+                )}
               </s-stack>
             </s-box>
+
+            <details>
+              <summary>Upload fallback (if picker is unavailable)</summary>
+              <s-box
+                padding="base"
+                border="base"
+                borderRadius="base"
+                background={isDragActive ? "bg-fill-brand" : "bg-fill"}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setIsDragActive(true);
+                }}
+                onDragLeave={(event) => {
+                  event.preventDefault();
+                  setIsDragActive(false);
+                }}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setIsDragActive(false);
+
+                  const nextFiles = Array.from(event.dataTransfer.files ?? []);
+                  if (!nextFiles.length) return;
+
+                  if (inputRef.current) {
+                    try {
+                      const dataTransfer = new DataTransfer();
+                      nextFiles.forEach((file) => dataTransfer.items.add(file));
+                      inputRef.current.files = dataTransfer.files;
+                    } catch {
+                      // Some embedded browser contexts disallow setting input.files.
+                    }
+                  }
+
+                  syncSelectedFiles(nextFiles);
+                }}
+              >
+                <s-stack direction="block" gap="small">
+                  <label htmlFor="file">Image files</label>
+                  <s-text>Drag and drop one or more images here</s-text>
+                  <input
+                    id="file"
+                    name="file"
+                    ref={inputRef}
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={(event) => {
+                      const nextFiles = Array.from(
+                        event.currentTarget.files ?? [],
+                      );
+                      syncSelectedFiles(nextFiles);
+                    }}
+                  />
+                </s-stack>
+              </s-box>
+            </details>
             {fileError && <s-text tone="critical">{fileError}</s-text>}
 
             <s-box
