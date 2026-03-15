@@ -106,6 +106,8 @@ const AUTH_REDIRECT_MESSAGE =
   "Request was redirected to a login page. Verify your app/auth URL configuration and try again.";
 const SERVER_ERROR_MESSAGE =
   "The server encountered an error while processing your crop request. Please try again shortly.";
+const EDGE_TIMEOUT_MESSAGE =
+  "The crop service timed out before returning a result (HTTP 524). Please retry with fewer/smaller images, or try again shortly.";
 const SUPPORT_COPY_INSTRUCTION = "Copy technical details for support.";
 const PRESET_ASPECT_RATIO_HINTS = {
   portrait: 4 / 5,
@@ -161,7 +163,7 @@ const CROP_RESIZE_HANDLES = [
   "se",
 ];
 const STABLE_EMBED_QUERY_PARAM_KEYS = ["shop", "host", "embedded"];
-const CROP_SUBMIT_PATH = "/api/crop";
+const CROP_SUBMIT_PATH = "/app/additional";
 const CROP_STATUS_BASE_PATH = "/app/additional";
 
 function clamp(value, min, max) {
@@ -442,6 +444,25 @@ function isLikelyAuthDocument(diagnostics) {
   return false;
 }
 
+function isLikelyEdgeTimeout(diagnostics) {
+  if (!diagnostics) {
+    return false;
+  }
+
+  if (diagnostics.status === 524) {
+    return true;
+  }
+
+  const lowerContentType = String(diagnostics.contentType || "").toLowerCase();
+  const lowerSnippet = String(diagnostics.textSnippet || "").toLowerCase();
+
+  if (!lowerContentType.includes("text/html")) {
+    return false;
+  }
+
+  return lowerSnippet.includes("cloudflare") && lowerSnippet.includes("timeout");
+}
+
 function getResponseErrorMessage(diagnostics) {
   if (!diagnostics) {
     return "Unexpected response from the server. Please retry.";
@@ -457,6 +478,10 @@ function getResponseErrorMessage(diagnostics) {
 
   if (isLikelyAuthDocument(diagnostics)) {
     return AUTH_REDIRECT_MESSAGE;
+  }
+
+  if (isLikelyEdgeTimeout(diagnostics)) {
+    return EDGE_TIMEOUT_MESSAGE;
   }
 
   if (diagnostics.status >= 500) {
@@ -477,6 +502,10 @@ function getUnexpectedResponseMessage(diagnostics) {
 
   if (isLikelyAuthRedirect(diagnostics) || isLikelyAuthDocument(diagnostics)) {
     return AUTH_REDIRECT_MESSAGE;
+  }
+
+  if (isLikelyEdgeTimeout(diagnostics)) {
+    return EDGE_TIMEOUT_MESSAGE;
   }
 
   const contentType = String(diagnostics.contentType || "").trim();
