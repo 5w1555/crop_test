@@ -16,12 +16,13 @@ export const action = async ({ request }) => {
   }
 
   const mediaIds = Array.isArray(body?.mediaIds) ? body.mediaIds : [];
+  const productIds = Array.isArray(body?.productIds) ? body.productIds : [];
 
-  if (!mediaIds.length) {
+  if (!mediaIds.length && !productIds.length) {
     return jsonError("Please select at least one Shopify media item.");
   }
 
-  const resolved = await resolveSelectedMedia({ admin, mediaIds });
+  const resolved = await resolveSelectedMedia({ admin, mediaIds, productIds });
 
   if (!resolved.media.length) {
     return jsonError("No valid Shopify media items were found for this shop.", 403, {

@@ -1531,10 +1531,15 @@ export default function CropImagePage() {
           : [];
 
       const mediaIds = [];
+      const productIds = [];
       pickedItems.forEach((item) => {
         if (item?.id && String(item.id).includes("MediaImage")) {
           mediaIds.push(String(item.id));
           return;
+        }
+
+        if (item?.id && String(item.id).includes("Product")) {
+          productIds.push(String(item.id));
         }
 
         if (Array.isArray(item?.media)) {
@@ -1546,7 +1551,7 @@ export default function CropImagePage() {
         }
       });
 
-      if (!mediaIds.length) {
+      if (!mediaIds.length && !productIds.length) {
         showToast("No images selected.");
         return;
       }
@@ -1563,7 +1568,7 @@ export default function CropImagePage() {
             Authorization: `Bearer ${idToken}`,
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ mediaIds }),
+          body: JSON.stringify({ mediaIds, productIds }),
         },
       );
 
