@@ -1572,9 +1572,28 @@ export default function CropImagePage() {
         },
       );
 
-      const payload = await response.json();
+      const rawBody = await response.text();
+      let payload = null;
+      if (rawBody) {
+        try {
+          payload = JSON.parse(rawBody);
+        } catch {
+          payload = null;
+        }
+      }
+
       if (!response.ok) {
-        showToast(payload?.error || "Unable to resolve selected media.", {
+        showToast(
+          payload?.error || rawBody || "Unable to resolve selected media.",
+          {
+            isError: true,
+          },
+        );
+        return;
+      }
+
+      if (!payload || typeof payload !== "object") {
+        showToast("Invalid response while resolving selected media.", {
           isError: true,
         });
         return;
