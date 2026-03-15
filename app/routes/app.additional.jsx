@@ -1335,7 +1335,7 @@ export default function CropImagePage() {
         setDownloadUrl(jobStatus.downloadUrl);
         setDownloadResult(jobStatus.cropSummary || null);
 
-        showToast("Crop completed. Click Download ZIP to get your file.");
+        showToast("Crop completed. Use the download link to save your ZIP file.");
       } catch (error) {
         if (cancelled) {
           return;
@@ -2551,31 +2551,33 @@ export default function CropImagePage() {
             {downloadUrl && (
               <s-box padding="base" border="base" borderRadius="base">
                 <s-stack direction="block" gap="small">
-                  <s-text fontWeight="semibold">Batch results</s-text>
+                  <s-text fontWeight="semibold">Download your images</s-text>
                   <s-text>
-                    Success: {downloadResult?.successCount ?? 0} · Failed: {downloadResult?.failedCount ?? 0}
+                    Your files are ready in a ZIP file.
                     {downloadResult?.elapsedSeconds !== null &&
                     downloadResult?.elapsedSeconds !== undefined
-                      ? ` · ${downloadResult.elapsedSeconds}s`
+                      ? ` Processing time: ${downloadResult.elapsedSeconds}s.`
                       : ""}
+                  </s-text>
+                  <s-text>
+                    Processed: {downloadResult?.successCount ?? 0} successful
+                    {" · "}
+                    {downloadResult?.failedCount ?? 0} failed
                   </s-text>
                   {(downloadResult?.failedFiles?.length || 0) > 0 && (
                     <s-text tone="critical">
                       Failed files: {downloadResult.failedFiles.join(", ")}
                     </s-text>
                   )}
-                  <s-button
-                    variant="primary"
-                    onClick={() => {
-                      try {
-                        window.top.open(downloadUrl, "_blank");
-                      } catch {
-                        window.open(downloadUrl, "_blank");
-                      }
-                    }}
-                  >
-                    Download ZIP
-                  </s-button>
+                  <s-link href={downloadUrl} target="_top" removeUnderline>
+                    Download ZIP file
+                  </s-link>
+                  <s-text tone="subdued">
+                    If your browser blocks downloads, open this link in a new tab:
+                  </s-text>
+                  <s-link href={downloadUrl} target="_blank">
+                    {downloadUrl}
+                  </s-link>
                 </s-stack>
               </s-box>
             )}
