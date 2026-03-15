@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   buildRouteCropRequestContract,
   normalizePipeline,
+  normalizePipelineStages,
 } from "./cropRequestContract.js";
 
 test("normalizePipeline returns supported values", () => {
@@ -24,6 +25,7 @@ test("buildRouteCropRequestContract serializes method, pipeline, and option valu
   const formData = new FormData();
   formData.set("method", "profile");
   formData.set("pipeline", "salience");
+  formData.set("pipeline_stages", "salience,heuristic");
   formData.set("target_aspect_ratio", "1:1");
   formData.set("margin_top", "0.1");
   formData.set("margin_right", "0.2");
@@ -37,6 +39,7 @@ test("buildRouteCropRequestContract serializes method, pipeline, and option valu
 
   assert.equal(contract.method, "profile");
   assert.equal(contract.pipeline, "salience");
+  assert.deepEqual(contract.pipelineStages, ["salience", "heuristic"]);
   assert.deepEqual(contract.optionValues, {
     targetAspectRatio: "1:1",
     marginTop: "0.1",
@@ -57,4 +60,10 @@ test("buildRouteCropRequestContract normalizes unknown pipeline to auto", () => 
 
   assert.equal(contract.method, "auto");
   assert.equal(contract.pipeline, "auto");
+  assert.deepEqual(contract.pipelineStages, ["auto"]);
+});
+
+test("normalizePipelineStages deduplicates and falls back to auto", () => {
+  assert.deepEqual(normalizePipelineStages("face,face,legacy"), ["face", "auto"]);
+  assert.deepEqual(normalizePipelineStages(""), ["auto"]);
 });

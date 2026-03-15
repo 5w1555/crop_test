@@ -15,6 +15,13 @@ import {
   buildRouteCropRequestContract,
   normalizePipeline,
 } from "../utils/cropRequestContract.js";
+import {
+  derivePrimaryPipeline,
+  FRONTEND_PIPELINE_OPTIONS,
+  getPipelineTemplateForPreset,
+  normalizePipelineStageList,
+  serializePipelineStages,
+} from "../utils/frontEndPipeline.js";
 
 const CROP_METHODS = [
   {
@@ -123,32 +130,6 @@ const METHOD_ASPECT_RATIO_HINTS = {
   below_lips: 1,
   center_content: 1,
 };
-const PIPELINE_OPTIONS = [
-  {
-    value: "auto",
-    label: "Auto",
-    description:
-      "Recommended for most batches. Smart Crop chooses the best pipeline per image.",
-  },
-  {
-    value: "face",
-    label: "Face",
-    description:
-      "Use for portrait-heavy sets where a visible face should drive composition.",
-  },
-  {
-    value: "salience",
-    label: "Salience",
-    description:
-      "Use for products and objects when visual attention (not faces) should lead framing.",
-  },
-  {
-    value: "heuristic",
-    label: "Heuristic",
-    description:
-      "Use for deterministic fallback behavior when you need consistent non-ML crop logic.",
-  },
-];
 const MIN_CROP_SIZE_FRACTION = 0.05;
 const CROP_COORDINATE_EPSILON = 0.001;
 const CROP_RESIZE_HIT_SIZE_PX = 14;
@@ -1106,7 +1087,7 @@ export default function CropImagePage() {
     height: 0,
   });
   const [selectedPreset, setSelectedPreset] = useState("auto");
-  const [selectedPipeline, setSelectedPipeline] = useState("auto");
+  const [selectedPipelineStages, setSelectedPipelineStages] = useState(["auto"]);
   const [previewCropRect, setPreviewCropRect] = useState(null);
   const [cropHoverHandle, setCropHoverHandle] = useState(null);
   const [isCropDirty, setIsCropDirty] = useState(false);
@@ -1170,7 +1151,12 @@ export default function CropImagePage() {
         setSelectedPreset(parsedPreferences.selectedPreset);
       }
 
-      setSelectedPipeline(normalizePipeline(parsedPreferences.selectedPipeline));
+      const persistedStages =
+        parsedPreferences.selectedPipelineStages ||
+        parsedPreferences.selectedPipeline ||
+        "auto";
+
+      setSelectedPipelineStages(normalizePipelineStageList(persistedStages));
     } catch (error) {
       console.warn("Failed to hydrate crop preferences from local storage", {
         error: error instanceof Error ? error.message : String(error),
@@ -1189,10 +1175,10 @@ export default function CropImagePage() {
       PREFERENCE_STORAGE_KEY,
       JSON.stringify({
         selectedPreset,
-        selectedPipeline,
+        selectedPipelineStages,
       }),
     );
-  }, [selectedPipeline, selectedPreset]);
+  }, [selectedPipelineStages, selectedPreset]);
 
   const showToast = useCallback(
     (message, options) => {
@@ -1471,9 +1457,17 @@ export default function CropImagePage() {
   const selectedMethodDetails =
     CROP_METHODS.find((method) => method.value === selectedMethod) ||
     CROP_METHODS[0];
+  const selectedPipeline = derivePrimaryPipeline(selectedPipelineStages);
   const selectedPipelineDetails =
-    PIPELINE_OPTIONS.find((pipeline) => pipeline.value === selectedPipeline) ||
-    PIPELINE_OPTIONS[0];
+    FRONTEND_PIPELINE_OPTIONS.find(
+      (pipeline) => pipeline.value === selectedPipeline,
+    ) || FRONTEND_PIPELINE_OPTIONS[0];
+  const selectedPipelineStageLabels = selectedPipelineStages.map((stage) => {
+    const option = FRONTEND_PIPELINE_OPTIONS.find(
+      (pipeline) => pipeline.value === stage,
+    );
+    return option ? option.label : stage;
+  });
   const isPlanBlockedByMethod =
     !planUsage.allowsFaceDetection && selectedMethod !== "auto";
   const blockedMethodUnlockPlan = PLAN_CONFIG.pro.label;
@@ -1878,6 +1872,32 @@ export default function CropImagePage() {
     return "crosshair";
   }, [cropHoverHandle, cropPreviewModel, isCropPointerActive]);
 
+  const addPipelineStage = useCallback((rawValue) => {
+    const stage = normalizePipeline(rawValue);
+    setSelectedPipelineStages((currentStages) => {
+      if (currentStages.includes(stage)) {
+        return currentStages;
+      }
+
+      const nextStages = [...currentStages.filter((value) => value !== "auto")];
+      nextStages.push(stage);
+      return normalizePipelineStageList(nextStages);
+    });
+  }, []);
+
+  const removePipelineStage = useCallback((rawValue) => {
+    const stage = normalizePipeline(rawValue);
+    setSelectedPipelineStages((currentStages) =>
+      normalizePipelineStageList(
+        currentStages.filter((candidateStage) => candidateStage !== stage),
+      ),
+    );
+  }, []);
+
+  const applyPresetPipelineTemplate = useCallback(() => {
+    setSelectedPipelineStages(getPipelineTemplateForPreset(selectedPreset));
+  }, [selectedPreset]);
+
   const handleDownloadSubmit = async (event) => {
     event.preventDefault();
     const form = event.currentTarget;
@@ -1931,6 +1951,10 @@ export default function CropImagePage() {
       });
       formData.set("method", selectedMethod);
       formData.set("pipeline", selectedPipeline);
+      formData.set(
+        "pipeline_stages",
+        serializePipelineStages(selectedPipelineStages),
+      );
       formData.set("target_aspect_ratio", cropOptionFields.targetAspectRatio);
       formData.set("margin_top", cropOptionFields.marginTop);
       formData.set("margin_right", cropOptionFields.marginRight);
@@ -2326,26 +2350,55 @@ export default function CropImagePage() {
               background="bg-fill-secondary"
             >
               <s-stack direction="block" gap="small">
-                <label htmlFor="pipeline">Pipeline</label>
-                <select
-                  id="pipeline"
-                  name="pipeline"
-                  value={selectedPipeline}
-                  onChange={(event) =>
-                    setSelectedPipeline(event.currentTarget.value)
-                  }
-                >
-                  {PIPELINE_OPTIONS.map((pipeline) => (
-                    <option key={pipeline.value} value={pipeline.value}>
-                      {pipeline.label}
-                    </option>
-                  ))}
-                </select>
+                <s-text fontWeight="semibold">Functional pipeline</s-text>
                 <s-text tone="subdued">
-                  {selectedPipelineDetails.description}
+                  Build an ordered fallback chain. The first stage is used as the
+                  primary backend pipeline; later stages document fallback intent.
                 </s-text>
+                <s-stack direction="inline" gap="small" wrap>
+                  {FRONTEND_PIPELINE_OPTIONS.map((pipeline) => {
+                    const isActive = selectedPipelineStages.includes(
+                      pipeline.value,
+                    );
+
+                    return (
+                      <s-button
+                        key={pipeline.value}
+                        type="button"
+                        variant={isActive ? "primary" : "secondary"}
+                        onClick={() =>
+                          isActive
+                            ? removePipelineStage(pipeline.value)
+                            : addPipelineStage(pipeline.value)
+                        }
+                      >
+                        {isActive ? `✓ ${pipeline.label}` : pipeline.label}
+                      </s-button>
+                    );
+                  })}
+                </s-stack>
+                <s-stack direction="inline" gap="small" wrap>
+                  <s-button
+                    type="button"
+                    variant="tertiary"
+                    onClick={applyPresetPipelineTemplate}
+                  >
+                    Use preset pipeline template
+                  </s-button>
+                  <s-text tone="subdued">
+                    Effective order: {selectedPipelineStageLabels.join(" → ")}
+                  </s-text>
+                </s-stack>
+                <s-text tone="subdued">{selectedPipelineDetails.description}</s-text>
               </s-stack>
             </s-box>
+
+            <input type="hidden" name="pipeline" value={selectedPipeline} />
+            <input
+              type="hidden"
+              name="pipeline_stages"
+              value={serializePipelineStages(selectedPipelineStages)}
+            />
 
             <details>
               <summary>
