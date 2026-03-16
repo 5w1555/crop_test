@@ -15,6 +15,11 @@ test("resolveSelectedMedia resolves media IDs through selected products", async 
               {
                 __typename: "MediaImage",
                 id: "gid://shopify/MediaImage/10",
+                image: { url: "https://cdn.example.com/10.jpg" },
+                product: {
+                  id: "gid://shopify/Product/1",
+                  title: "Hat",
+                },
               },
               {
                 __typename: "Product",
@@ -122,4 +127,42 @@ test("resolveSelectedMedia marks direct media IDs invalid without selected produ
 
   assert.deepEqual(resolved.media, []);
   assert.deepEqual(resolved.invalidMediaIds, ["gid://shopify/MediaImage/404"]);
+});
+
+test("resolveSelectedMedia resolves direct media IDs when media node is returned", async () => {
+  const admin = {
+    graphql: async () => ({
+      json: async () => ({
+        data: {
+          nodes: [
+            {
+              __typename: "MediaImage",
+              id: "gid://shopify/MediaImage/22",
+              image: { url: "https://cdn.example.com/22.jpg" },
+              product: {
+                id: "gid://shopify/Product/2",
+                title: "Socks",
+              },
+            },
+          ],
+        },
+      }),
+    }),
+  };
+
+  const resolved = await resolveSelectedMedia({
+    admin,
+    mediaIds: ["gid://shopify/MediaImage/22"],
+    productIds: [],
+  });
+
+  assert.deepEqual(resolved.invalidMediaIds, []);
+  assert.deepEqual(resolved.media, [
+    {
+      mediaId: "gid://shopify/MediaImage/22",
+      sourceUrl: "https://cdn.example.com/22.jpg",
+      productId: "gid://shopify/Product/2",
+      productTitle: "Socks",
+    },
+  ]);
 });
