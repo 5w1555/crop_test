@@ -1,10 +1,12 @@
 import { authenticate } from "../shopify.server";
 import { buildPlanView } from "../utils/plan.js";
-import { getShopPlanUsage, reservePlanCapacity } from "../utils/plan.server.js";
+import { getShopPlanUsage, reservePlanCapacity, commitPlanUsage } from "../utils/plan.server.js";
 import { createCropJob } from "../lib/crop/jobs.server.js";
 import { getBillingState } from "../lib/billing.server.js";
 import { buildFilesFromMediaSources, resolveSelectedMedia } from "../utils/shopifyMedia.server.js";
 import { buildCropOptionPayload, buildRouteCropRequestContract } from "../lib/crop/contract.js";
+import { cropImagesWithOutputs } from "../lib/crop/client.server.js";
+import { writeBackCroppedMedia } from "../lib/mediaWriteback.server.js";
 
 function validateImageFile(file) {
   if (!(file instanceof File)) return "Please upload an image.";
@@ -26,9 +28,9 @@ export const loader = async ({ request }) => {
 
 export const action = async ({ request }) => {
   const { session, billing, admin } = await authenticate.admin(request);
-  const startedAt = Date.now();
-  const formData = await request.formData();
+  console.log("=== CROP ACTION STARTED ==="); // ← will now appear in terminal
 
+  const formData = await request.formData();
   const files = formData.getAll("file");
   const selectedMediaIds = formData.getAll("selected_media_id").map(String).filter(Boolean);
   const selectedProductIds = formData.getAll("selected_product_id").map(String).filter(Boolean);
@@ -37,16 +39,14 @@ export const action = async ({ request }) => {
     return jsonError("Please select at least one Shopify media item or upload an image.");
   }
 
-  // Resolve Shopify media (already fixed and working)
+  // Resolve media (already working)
   let resolvedMedia = [];
-  let mediaTargets = [];
   if (selectedMediaIds.length) {
     const mediaResult = await resolveSelectedMedia({ admin, mediaIds: selectedMediaIds, productIds: selectedProductIds });
     if (mediaResult.invalidMediaIds.length) {
       return jsonError("Some selected media items are unavailable.", 403, { invalidMediaIds: mediaResult.invalidMediaIds });
     }
     resolvedMedia = mediaResult.media;
-    mediaTargets = resolvedMedia;
   }
 
   const uploadedFiles = files.filter(f => f instanceof File);
@@ -57,7 +57,7 @@ export const action = async ({ request }) => {
   const optionPayload = buildCropOptionPayload(optionValues);
   if (optionPayload.errors.length) return jsonError(optionPayload.errors.join(" "));
 
-  // Billing (unchanged)
+  // Billing check
   const billingState = await getBillingState({ billing });
   const planReservation = await reservePlanCapacity({
     shop: session.shop,
@@ -67,37 +67,42 @@ export const action = async ({ request }) => {
   });
   if (!planReservation.ok) return jsonError(planReservation.error, 403, { plan: planReservation.plan });
 
-  // === NEW SYNCHRONOUS PIPELINE (this is the fix) ===
+  // === SYNCHRONOUS CROP (this is the only real pipeline now) ===
   let cropOutputs;
   try {
+    console.log(`Cropping ${filesForCrop.length} file(s) with pipeline: ${pipeline}`);
     cropOutputs = await cropImagesWithOutputs(filesForCrop, {
       method: planReservation.effectiveMethod,
       pipeline,
       ...optionPayload.options,
     });
   } catch (err) {
+    console.error("FastAPI crop failed:", err);
     return jsonError(err.message || "Crop failed", 500);
   }
 
-  // Writeback to Shopify if we have media targets
+  // Writeback if we have Shopify media
   let mediaUpdates = [];
-  if (mediaTargets.length) {
-    mediaUpdates = await writeBackCroppedMedia({
-      admin,
-      shop: session.shop,
-      cropOutputs,
-      mediaTargets,
-      cropParams: optionPayload.options,
-    });
+  if (resolvedMedia.length) {
+    try {
+      mediaUpdates = await writeBackCroppedMedia({
+        admin,
+        shop: session.shop,
+        cropOutputs,
+        mediaTargets: resolvedMedia,
+        cropParams: optionPayload.options,
+      });
+    } catch (err) {
+      console.error("Writeback failed:", err);
+    }
   } else {
-    // Direct upload case — just return the cropped data
-    mediaUpdates = cropOutputs.map((output, i) => ({
+    mediaUpdates = cropOutputs.map(output => ({
       status: "updated",
       sourceFilename: output.sourceFilename,
       outputFilename: output.sourceFilename.replace(/\.\w+$/, "_cropped.jpg"),
       contentType: output.contentType,
       bytes: output.byteLength,
-      updatedImageUrl: null, // or base64 if you want
+      updatedImageUrl: null,
       mutationOutcome: "single_crop",
       error: null,
     }));
@@ -105,12 +110,20 @@ export const action = async ({ request }) => {
 
   await commitPlanUsage({ shop: session.shop, imageCount: filesForCrop.length });
 
-  // Optional: still log to Prisma for history (keeps your DB happy)
-  const jobId = await createCropJob({ /* minimal version or skip if you want */ });
+  // Light Prisma log (keeps your history)
+  await createCropJob({
+    shop: session.shop,
+    admin,
+    files: filesForCrop,
+    startedAt: Date.now(),
+    mediaTargets: resolvedMedia,
+    options: { method: planReservation.effectiveMethod, pipeline, ...optionPayload.options },
+  });
+
+  console.log("=== CROP ACTION SUCCEEDED ===", { successCount: mediaUpdates.length });
 
   return Response.json({
     status: "succeeded",
-    jobId,
     mediaUpdates,
     summary: {
       requestedCount: filesForCrop.length,
