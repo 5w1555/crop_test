@@ -52,14 +52,10 @@ function buildEmbeddedRequestQueryString(search, sessionToken = "") {
   return query ? `?${query}` : "";
 }
 
-function extractCropJobId(payload) {
-  return typeof payload?.jobId === "string" && payload.jobId.trim() ? payload.jobId.trim() : "";
-}
-
 export default function CropPage() {
   const { appOrigin } = useLoaderData();
   const shopify = useAppBridge();
-  const { state: workflowState, isBusy, beginSubmit, acceptSubmit, finishSuccess, finishFailure } = useCropWorkflow();
+  const { state: workflowState, isBusy, beginSubmit, finishSuccess, finishFailure } = useCropWorkflow(); // ← removed unused acceptSubmit
 
   const [selectedPreset, setSelectedPreset] = useState("auto");
   const [selectedUploadFiles, setSelectedUploadFiles] = useState([]);
@@ -85,36 +81,6 @@ export default function CropPage() {
       shopify.toast.show(message, options);
     }
   }, [shopify]);
-
-  const pollJobStatus = useCallback(async (jobId) => {
-    const idToken = await shopify.idToken();
-    const statusUrl = `${appOrigin}/app/crop/status/${jobId}${buildEmbeddedRequestQueryString(
-      typeof window === "undefined" ? "" : window.location.search,
-      idToken,
-    )}`;
-
-    let isComplete = false;
-    let finalPayload = null;
-    while (!isComplete) {
-      await new Promise((resolve) => setTimeout(resolve, 1500));
-      const response = await fetch(statusUrl, { headers: { Authorization: `Bearer ${idToken}` } });
-      const payload = await readJsonPayload(response);
-      if (!response.ok) {
-        const diagnostics = await buildResponseDiagnostics(response);
-        throw new Error(payload?.error || mapDiagnosticsToErrorMessage(diagnostics, "Failed to fetch crop status."));
-      }
-      if (!payload) {
-        const diagnostics = await buildResponseDiagnostics(response);
-        throw new Error(mapDiagnosticsToErrorMessage(diagnostics, "Unexpected crop status response."));
-      }
-      if (payload?.status === "succeeded" || payload?.status === "failed" || payload?.status === "partial_failure") {
-        finalPayload = payload;
-        isComplete = true;
-      }
-    }
-
-    return finalPayload;
-  }, [appOrigin, shopify]);
 
   const submitCrop = useCallback(async () => {
     if (!selectionCount) {
@@ -153,43 +119,38 @@ export default function CropPage() {
       });
 
       const payload = await readJsonPayload(response);
+
       if (!response.ok) {
         const diagnostics = await buildResponseDiagnostics(response);
         throw new Error(payload?.error || mapDiagnosticsToErrorMessage(diagnostics, "Crop request failed."));
       }
       if (!payload) {
-        const diagnostics = await buildResponseDiagnostics(response);
-        throw new Error(mapDiagnosticsToErrorMessage(diagnostics, "Unexpected response from crop submit."));
+        throw new Error("Empty response from server.");
       }
 
-      const jobId = extractCropJobId(payload);
-      if (!jobId) throw new Error("Missing crop job ID.");
-      acceptSubmit(jobId);
-
-      const statusPayload = await pollJobStatus(jobId);
-      const normalized = parseCanonicalCropResponse(statusPayload, { files: selectedFiles });
-      if (!normalized) throw new Error("Unexpected crop status response.");
+      // Direct success (no jobId, no polling)
+      const normalized = parseCanonicalCropResponse(payload, { files: selectedFiles }) 
+        || { mediaUpdates: payload.mediaUpdates || [], summary: payload.summary || {} }; // safe fallback
 
       setResult(normalized);
       finishSuccess(normalized);
-      showToast("Crop job completed.");
+      showToast("Crop completed successfully!");
+
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to crop image.";
       finishFailure({ message });
       showToast(message, { isError: true });
     }
   }, [
-    acceptSubmit,
-    appOrigin,
     beginSubmit,
-    finishFailure,
     finishSuccess,
-    pollJobStatus,
-    selectedFiles,
-    selectedMethod,
-    selectedShopifyMedia,
-    selectedUploadFiles,
+    finishFailure,
     selectionCount,
+    selectedUploadFiles,
+    selectedShopifyMedia,
+    selectedMethod,
+    selectedFiles,
+    appOrigin,
     shopify,
     showToast,
   ]);
