@@ -1,7 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
-import { parseCanonicalCropResponse } from "../../utils/cropRequestContract.js";
+import {
+  applyRouteCropRequestContract,
+  DEFAULT_CROP_OPTION_VALUES,
+  parseCanonicalCropResponse,
+} from "../../utils/cropRequestContract.js";
 import { useCropWorkflow } from "./useCropWorkflow.js";
 import MediaSelector from "./MediaSelector.jsx";
 import PresetSelector from "./PresetSelector.jsx";
@@ -122,17 +126,12 @@ export default function CropPage() {
         formData.append("selected_product_id", media.productId || "");
       });
 
-      formData.set("method", selectedMethod);
-      formData.set("pipeline", "auto");
-      formData.set("pipeline_stages", "auto");
-      formData.set("target_aspect_ratio", "");
-      formData.set("margin_top", "");
-      formData.set("margin_right", "");
-      formData.set("margin_bottom", "");
-      formData.set("margin_left", "");
-      formData.set("anchor_hint", "");
-      formData.set("filters", "");
-      formData.set("crop_coordinates", "");
+      applyRouteCropRequestContract(formData, {
+        method: selectedMethod,
+        pipeline: "auto",
+        pipelineStages: ["auto"],
+        optionValues: DEFAULT_CROP_OPTION_VALUES,
+      });
 
       const idToken = await shopify.idToken();
       const submitUrl = `${appOrigin}/app/additional${buildEmbeddedRequestQueryString(
