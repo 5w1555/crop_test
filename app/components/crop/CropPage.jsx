@@ -55,7 +55,7 @@ function buildEmbeddedRequestQueryString(search, sessionToken = "") {
 export default function CropPage() {
   const { appOrigin } = useLoaderData();
   const shopify = useAppBridge();
-  const { state: workflowState, isBusy, beginSubmit, finishSuccess, finishFailure } = useCropWorkflow(); // ← removed unused acceptSubmit
+  const { state: workflowState, isBusy, beginSubmit, finishSuccess, finishFailure } = useCropWorkflow();
 
   const [selectedPreset, setSelectedPreset] = useState("auto");
   const [selectedUploadFiles, setSelectedUploadFiles] = useState([]);
@@ -106,15 +106,13 @@ export default function CropPage() {
         optionValues: DEFAULT_CROP_OPTION_VALUES,
       });
 
-      const idToken = await shopify.idToken();
       const submitUrl = `${appOrigin}/app/crop${buildEmbeddedRequestQueryString(
         typeof window === "undefined" ? "" : window.location.search,
-        idToken,
       )}`;
 
-      const response = await fetch(submitUrl, {
+      // === FIXED: use shopify.fetch (handles auth + embedded context perfectly) ===
+      const response = await shopify.fetch(submitUrl, {
         method: "POST",
-        headers: { Authorization: `Bearer ${idToken}` },
         body: formData,
       });
 
@@ -128,9 +126,9 @@ export default function CropPage() {
         throw new Error("Empty response from server.");
       }
 
-      // Direct success (no jobId, no polling)
-      const normalized = parseCanonicalCropResponse(payload, { files: selectedFiles }) 
-        || { mediaUpdates: payload.mediaUpdates || [], summary: payload.summary || {} }; // safe fallback
+      // Direct success handling (no jobId, no polling)
+      const normalized = parseCanonicalCropResponse(payload, { files: selectedFiles })
+        || { mediaUpdates: payload.mediaUpdates || [], summary: payload.summary || {} };
 
       setResult(normalized);
       finishSuccess(normalized);
