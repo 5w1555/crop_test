@@ -14,30 +14,10 @@ import CropResultPanel from "./CropResultPanel.jsx";
 import { buildResponseDiagnostics, mapDiagnosticsToErrorMessage, readJsonPayload } from "./apiClient.js";
 
 const PRESET_OPTIONS = [
-  {
-    value: "auto",
-    label: "Auto (recommended)",
-    method: "auto",
-    description: "Best default for mixed catalog uploads.",
-  },
-  {
-    value: "portrait",
-    label: "Portrait",
-    method: "head_bust",
-    description: "Head-and-shoulders framing for profile imagery.",
-  },
-  {
-    value: "product",
-    label: "Product",
-    method: "auto",
-    description: "Balanced product framing.",
-  },
-  {
-    value: "square",
-    label: "Square",
-    method: "chin",
-    description: "Tighter composition for square presentation.",
-  },
+  { value: "auto", label: "Auto (recommended)", method: "auto", description: "Best default for mixed catalog uploads." },
+  { value: "portrait", label: "Portrait", method: "head_bust", description: "Head-and-shoulders framing for profile imagery." },
+  { value: "product", label: "Product", method: "auto", description: "Balanced product framing." },
+  { value: "square", label: "Square", method: "chin", description: "Tighter composition for square presentation." },
 ];
 
 function buildEmbeddedRequestQueryString(search, sessionToken = "") {
@@ -77,9 +57,7 @@ export default function CropPage() {
   const selectionCount = selectedUploadFiles.length || selectedShopifyMedia.length;
 
   const showToast = useCallback((message, options) => {
-    if (shopify?.toast?.show) {
-      shopify.toast.show(message, options);
-    }
+    if (shopify?.toast?.show) shopify.toast.show(message, options);
   }, [shopify]);
 
   const submitCrop = useCallback(async () => {
@@ -106,13 +84,16 @@ export default function CropPage() {
         optionValues: DEFAULT_CROP_OPTION_VALUES,
       });
 
+      // === OFFICIAL RELIABLE PATTERN (fresh token every time) ===
+      const idToken = await shopify.idToken();
       const submitUrl = `${appOrigin}/app/crop${buildEmbeddedRequestQueryString(
         typeof window === "undefined" ? "" : window.location.search,
+        idToken
       )}`;
 
-      // === FIXED: use shopify.fetch (handles auth + embedded context perfectly) ===
-      const response = await shopify.fetch(submitUrl, {
+      const response = await fetch(submitUrl, {
         method: "POST",
+        headers: { Authorization: `Bearer ${idToken}` },
         body: formData,
       });
 
@@ -122,11 +103,8 @@ export default function CropPage() {
         const diagnostics = await buildResponseDiagnostics(response);
         throw new Error(payload?.error || mapDiagnosticsToErrorMessage(diagnostics, "Crop request failed."));
       }
-      if (!payload) {
-        throw new Error("Empty response from server.");
-      }
+      if (!payload) throw new Error("Empty response from server.");
 
-      // Direct success handling (no jobId, no polling)
       const normalized = parseCanonicalCropResponse(payload, { files: selectedFiles })
         || { mediaUpdates: payload.mediaUpdates || [], summary: payload.summary || {} };
 
@@ -136,6 +114,7 @@ export default function CropPage() {
 
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to crop image.";
+      console.error("=== CROP SUBMIT ERROR ===", error);
       finishFailure({ message });
       showToast(message, { isError: true });
     }
