@@ -9,7 +9,7 @@ import {
   normalizePipeline,
   normalizePipelineStages,
   parseCanonicalCropResponse,
-} from "./cropRequestContract.js";
+} from "../lib/crop/contract.js";
 
 test("normalizePipeline returns supported values", () => {
   assert.equal(normalizePipeline("face"), "face");

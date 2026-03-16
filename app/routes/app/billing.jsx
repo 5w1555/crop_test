@@ -1,11 +1,11 @@
 import { useLoaderData, useRouteError } from "react-router";
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server";
+import { authenticate } from "../../shopify.server";
 import {
   cancelProPlan,
   getBillingState,
   requestProPlan,
-} from "../utils/billing.server";
+} from "../../lib/billing.server.js";
 
 export const loader = async ({ request }) => {
   const { billing } = await authenticate.admin(request);

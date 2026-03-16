@@ -1,6 +1,6 @@
 import { redirect, Form, useLoaderData } from "react-router";
-import { login } from "../../shopify.server";
-import styles from "./styles.module.css";
+import { login } from "../shopify.server";
+import styles from "./_index.module.css";
 
 export const loader = async ({ request }) => {
   const url = new URL(request.url);
@@ -75,7 +75,7 @@ export default function App() {
         )}
 
         <p className={styles.nextStep}>
-          Next: open <strong>Crop Images</strong> in <code>/app/additional</code> to select media
+          Next: open <strong>Crop Images</strong> in <code>/app/crop</code> to select media
           from Shopify, crop, and save updates directly to your store.
         </p>
       </div>

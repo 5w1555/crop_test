@@ -61,7 +61,7 @@ export default function MediaSelector({
 
       const idToken = await shopify.idToken();
       const response = await fetch(
-        `${appOrigin}/app/additional/media/resolve${buildEmbeddedRequestQueryString(
+        `${appOrigin}/app/crop/media/resolve${buildEmbeddedRequestQueryString(
           typeof window === "undefined" ? "" : window.location.search,
           idToken,
         )}`,

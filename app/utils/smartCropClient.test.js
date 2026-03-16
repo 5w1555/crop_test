@@ -2,7 +2,7 @@ import process from "node:process";
 import { Buffer } from "node:buffer";
 import test from "node:test";
 import assert from "node:assert/strict";
-const moduleUrl = new URL("./smartCropClient.js", import.meta.url).href;
+const moduleUrl = new URL("../lib/crop/client.server.js", import.meta.url).href;
 
 async function loadClient(apiUrl, apiToken = "test-token") {
   if (apiUrl === undefined) {

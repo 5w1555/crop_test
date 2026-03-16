@@ -1,4 +1,4 @@
-import { CROP_PIPELINES, normalizePipeline } from "./cropRequestContract.js";
+import { CROP_PIPELINES, normalizePipeline } from "./crop/contract.js";
 
 export const FRONTEND_PIPELINE_OPTIONS = [
   {

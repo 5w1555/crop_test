@@ -6,7 +6,7 @@ import {
   getPipelineTemplateForPreset,
   normalizePipelineStageList,
   serializePipelineStages,
-} from "./frontEndPipeline.js";
+} from "../lib/frontEndPipeline.js";
 
 test("normalizePipelineStageList sanitizes values, dedupes, and falls back to auto", () => {
   assert.deepEqual(normalizePipelineStageList("face, auto, face, legacy"), [

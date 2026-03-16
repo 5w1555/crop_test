@@ -5,7 +5,7 @@ import {
   applyRouteCropRequestContract,
   DEFAULT_CROP_OPTION_VALUES,
   parseCanonicalCropResponse,
-} from "../../utils/cropRequestContract.js";
+} from "../../lib/crop/contract.js";
 import { useCropWorkflow } from "./useCropWorkflow.js";
 import MediaSelector from "./MediaSelector.jsx";
 import PresetSelector from "./PresetSelector.jsx";
@@ -87,7 +87,7 @@ export default function CropPage() {
 
   const pollJobStatus = useCallback(async (jobId) => {
     const idToken = await shopify.idToken();
-    const statusUrl = `${appOrigin}/app/additional/status/${jobId}${buildEmbeddedRequestQueryString(
+    const statusUrl = `${appOrigin}/app/crop/status/${jobId}${buildEmbeddedRequestQueryString(
       typeof window === "undefined" ? "" : window.location.search,
       idToken,
     )}`;
@@ -134,7 +134,7 @@ export default function CropPage() {
       });
 
       const idToken = await shopify.idToken();
-      const submitUrl = `${appOrigin}/app/additional${buildEmbeddedRequestQueryString(
+      const submitUrl = `${appOrigin}/app/crop${buildEmbeddedRequestQueryString(
         typeof window === "undefined" ? "" : window.location.search,
         idToken,
       )}`;

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { writeBackCroppedMedia } from "./mediaWriteback.server.js";
+import { writeBackCroppedMedia } from "../lib/mediaWriteback.server.js";
 
 function createInMemoryDb() {
   const records = new Map();
