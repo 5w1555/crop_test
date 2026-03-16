@@ -1,13 +1,12 @@
-import { json } from "react-router";
-import { authenticate } from "../../../shopify.server";
+import { authenticate } from "../shopify.server";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { useState, useCallback } from "react";
-import { cropImagesWithOutputs } from "../../../lib/crop/client.server.js";
+import { cropImagesWithOutputs } from "../lib/crop/client.server.js";
 
 export const loader = async () => ({});
 
 export const action = async ({ request }) => {
-  const { session } = await authenticate.admin(request);
+  await authenticate.admin(request);
   const formData = await request.formData();
   const uploadedFiles = formData.getAll("file");
 
@@ -16,10 +15,10 @@ export const action = async ({ request }) => {
   try {
     const outputs = await cropImagesWithOutputs(uploadedFiles, { method: "auto", pipeline: "auto" });
     console.log("=== ACTION SUCCESS ===", { count: outputs.length });
-    return json({ status: "succeeded", mediaUpdates: outputs });
+    return Response.json({ status: "succeeded", mediaUpdates: outputs });
   } catch (err) {
     console.error("=== ACTION FAILED ===", err);
-    return json({ error: err.message || "Crop failed" }, { status: 500 });
+    return Response.json({ error: err.message || "Crop failed" }, { status: 500 });
   }
 };
 
