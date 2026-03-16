@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  applyRouteCropRequestContract,
+  buildCropOptionPayload,
   buildRouteCropRequestContract,
   buildStoreUpdateResultContract,
   normalizePipeline,
@@ -90,4 +92,48 @@ test("buildStoreUpdateResultContract supports partial failures", () => {
 
 test("parseCanonicalCropResponse rejects non-canonical payloads", () => {
   assert.equal(parseCanonicalCropResponse({ downloadUrl: "https://legacy" }), null);
+});
+
+
+test("applyRouteCropRequestContract writes normalized option fields", () => {
+  const formData = new FormData();
+
+  applyRouteCropRequestContract(formData, {
+    method: "head_bust",
+    pipeline: "FACE_DETECTION",
+    pipelineStages: "salience,legacy,salience",
+    optionValues: {
+      targetAspectRatio: "4:5",
+      marginTop: "0.1",
+      marginRight: "0.2",
+      marginBottom: "0.3",
+      marginLeft: "0.4",
+      anchorHint: "center",
+      filters: "detail",
+      cropCoordinates: '{"left":0.1}',
+    },
+  });
+
+  assert.equal(formData.get("method"), "head_bust");
+  assert.equal(formData.get("pipeline"), "face");
+  assert.equal(formData.get("pipeline_stages"), "salience,auto");
+  assert.equal(formData.get("target_aspect_ratio"), "4:5");
+});
+
+test("buildCropOptionPayload validates and normalizes values", () => {
+  const payload = buildCropOptionPayload({
+    targetAspectRatio: "1:1",
+    marginTop: "0",
+    marginRight: "1",
+    marginBottom: "2",
+    marginLeft: "3",
+    anchorHint: "center",
+    filters: "detail,sharpen",
+    cropCoordinates: '{"left":0.1,"top":0.1}',
+  });
+
+  assert.deepEqual(payload.errors, []);
+  assert.equal(payload.options.targetAspectRatio, "1:1");
+  assert.deepEqual(payload.options.filters, ["detail", "sharpen"]);
+  assert.equal(payload.options.marginLeft, 3);
 });
