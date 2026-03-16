@@ -12,6 +12,16 @@ const SHOPIFY_MEDIA_QUERY = `#graphql
   query ResolveSelectedMedia($ids: [ID!]!) {
     nodes(ids: $ids) {
       __typename
+      ... on MediaImage {
+        id
+        image {
+          url
+        }
+        product {
+          id
+          title
+        }
+      }
       ... on Product {
         id
         title
@@ -62,9 +72,13 @@ export async function resolveSelectedMedia({ admin, mediaIds, productIds }) {
       !node ||
       node.__typename !== "MediaImage" ||
       !node.id ||
-      !node.image?.url ||
-      !fallbackProduct?.id
+      !node.image?.url
     ) {
+      return false;
+    }
+
+    const resolvedProduct = node.product?.id ? node.product : fallbackProduct;
+    if (!resolvedProduct?.id) {
       return false;
     }
 
@@ -76,8 +90,8 @@ export async function resolveSelectedMedia({ admin, mediaIds, productIds }) {
     media.push({
       mediaId: node.id,
       sourceUrl: node.image.url,
-      productId: fallbackProduct.id,
-      productTitle: fallbackProduct.title || "",
+      productId: resolvedProduct.id,
+      productTitle: resolvedProduct.title || "",
     });
     return true;
   };
@@ -97,8 +111,12 @@ export async function resolveSelectedMedia({ admin, mediaIds, productIds }) {
   });
 
   normalizedMediaIds.forEach((mediaId) => {
-    const existsInResolvedProducts = media.some((item) => item.mediaId === mediaId);
-    if (!existsInResolvedProducts) invalidMediaIds.push(mediaId);
+    const node = nodesById.get(mediaId);
+    appendMediaNode(node, null);
+  });
+
+  normalizedMediaIds.forEach((mediaId) => {
+    if (!seenMediaIds.has(mediaId)) invalidMediaIds.push(mediaId);
   });
 
   return {
