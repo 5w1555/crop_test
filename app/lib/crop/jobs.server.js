@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 
-import prisma from "../db.server.js";
-import { cropImages, cropImagesWithOutputs } from "./smartCropClient.js";
-import { commitPlanUsage } from "./plan.server.js";
-import { buildStoreUpdateResultContract } from "./cropRequestContract.js";
-import { writeBackCroppedMedia } from "./mediaWriteback.server.js";
+import prisma from "../../db.server.js";
+import { cropImages, cropImagesWithOutputs } from "./client.server.js";
+import { commitPlanUsage } from "../../utils/plan.server.js";
+import { buildStoreUpdateResultContract } from "./contract.js";
+import { writeBackCroppedMedia } from "../mediaWriteback.server.js";
 
 const CROP_JOB_RETENTION_DAYS = 14;
 const CLEANUP_INTERVAL_MS = 24 * 60 * 60 * 1000;

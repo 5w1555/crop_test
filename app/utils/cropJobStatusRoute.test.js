@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { createCropJobStatusLoader } from "../routes/app.additional.status.$jobId.server.js";
+import { createCropJobStatusLoader } from "../services/cropJobStatusRoute.server.js";
 
 test("status route can poll a submitted job after simulated process restart", async () => {
   const persistedJobs = new Map();

@@ -1,10 +1,10 @@
 import { authenticate } from "../shopify.server";
 import { buildPlanView } from "../utils/plan.js";
 import { getShopPlanUsage, reservePlanCapacity } from "../utils/plan.server.js";
-import { createCropJob } from "../utils/cropJobs.server.js";
-import { getBillingState } from "../utils/billing.server";
-import { buildFilesFromMediaSources, resolveSelectedMedia } from "../utils/shopifyMedia.server";
-import { buildCropOptionPayload, buildRouteCropRequestContract } from "../utils/cropRequestContract.js";
+import { createCropJob } from "../lib/crop/jobs.server.js";
+import { getBillingState } from "../lib/billing.server.js";
+import { buildFilesFromMediaSources, resolveSelectedMedia } from "../utils/shopifyMedia.server.js";
+import { buildCropOptionPayload, buildRouteCropRequestContract } from "../lib/crop/contract.js";
 
 function validateImageFile(file) {
   if (!(file instanceof File)) return "Please upload an image.";

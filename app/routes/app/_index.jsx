@@ -1,5 +1,5 @@
 import { boundary } from "@shopify/shopify-app-react-router/server";
-import { authenticate } from "../shopify.server";
+import { authenticate } from "../../shopify.server";
 
 export const loader = async ({ request }) => {
   await authenticate.admin(request);
@@ -11,7 +11,7 @@ export default function Index() {
     <s-page heading="Smart Crop app home">
       <s-section heading="Start with Crop Image">
         <s-paragraph>
-          Use <s-link href="/app/additional">Crop Image</s-link> to choose media
+          Use <s-link href="/app/crop">Crop Image</s-link> to choose media
           from your Shopify library, crop it, and save the updated media directly
           back to your store.
         </s-paragraph>

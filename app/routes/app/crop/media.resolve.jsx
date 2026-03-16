@@ -1,5 +1,5 @@
-import { authenticate } from "../shopify.server";
-import { resolveSelectedMedia } from "../utils/shopifyMedia.server";
+import { authenticate } from "../../../shopify.server";
+import { resolveSelectedMedia } from "../../../utils/shopifyMedia.server.js";
 
 function jsonError(error, status = 400, extra = {}) {
   return Response.json({ error, ...extra }, { status });

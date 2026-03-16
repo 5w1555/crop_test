@@ -1,4 +1,4 @@
-import { PRO_PLAN } from "./billing";
+export const PRO_PLAN = "Pro plan";
 
 export const isBillingTestMode = process.env.SHOPIFY_BILLING_TEST_MODE === "true";
 
