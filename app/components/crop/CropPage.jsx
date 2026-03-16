@@ -11,6 +11,7 @@ import MediaSelector from "./MediaSelector.jsx";
 import PresetSelector from "./PresetSelector.jsx";
 import CropSubmitPanel from "./CropSubmitPanel.jsx";
 import CropResultPanel from "./CropResultPanel.jsx";
+import { buildResponseDiagnostics, mapDiagnosticsToErrorMessage, readJsonPayload } from "./apiClient.js";
 
 const PRESET_OPTIONS = [
   {
@@ -97,9 +98,15 @@ export default function CropPage() {
     while (!isComplete) {
       await new Promise((resolve) => setTimeout(resolve, 1500));
       const response = await fetch(statusUrl, { headers: { Authorization: `Bearer ${idToken}` } });
-      const payload = await response.json();
-
-      if (!response.ok) throw new Error(payload?.error || "Failed to fetch crop status.");
+      const payload = await readJsonPayload(response);
+      if (!response.ok) {
+        const diagnostics = await buildResponseDiagnostics(response);
+        throw new Error(payload?.error || mapDiagnosticsToErrorMessage(diagnostics, "Failed to fetch crop status."));
+      }
+      if (!payload) {
+        const diagnostics = await buildResponseDiagnostics(response);
+        throw new Error(mapDiagnosticsToErrorMessage(diagnostics, "Unexpected crop status response."));
+      }
       if (payload?.status === "succeeded" || payload?.status === "failed" || payload?.status === "partial_failure") {
         finalPayload = payload;
         isComplete = true;
@@ -145,8 +152,15 @@ export default function CropPage() {
         body: formData,
       });
 
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload?.error || "Crop request failed.");
+      const payload = await readJsonPayload(response);
+      if (!response.ok) {
+        const diagnostics = await buildResponseDiagnostics(response);
+        throw new Error(payload?.error || mapDiagnosticsToErrorMessage(diagnostics, "Crop request failed."));
+      }
+      if (!payload) {
+        const diagnostics = await buildResponseDiagnostics(response);
+        throw new Error(mapDiagnosticsToErrorMessage(diagnostics, "Unexpected response from crop submit."));
+      }
 
       const jobId = extractCropJobId(payload);
       if (!jobId) throw new Error("Missing crop job ID.");
