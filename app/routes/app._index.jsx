@@ -1,5 +1,5 @@
-import { useFetcher } from "@remix-run/react";   // ← this is the line that was missing
-import { useState, useCallback } from "react";
+import { useFetcher } from "react-router";   // ← THIS is the correct v7 import
+import { useState, useCallback, useEffect } from "react";
 
 export default function CropPage() {
   const fetcher = useFetcher();
@@ -17,18 +17,20 @@ export default function CropPage() {
     fetcher.submit(form, { method: "POST", action: "/app/crop" });
   }, [files, fetcher]);
 
-  // Update result when response arrives
-  if (fetcher.data) {
-    const data = fetcher.data;
-    setResult(data);
-    setLoading(false);
+  // Handle response when it arrives (safe way)
+  useEffect(() => {
+    if (fetcher.data) {
+      const data = fetcher.data;
+      setResult(data);
+      setLoading(false);
 
-    if (data.error) {
-      alert("❌ Error: " + (data.error || "Try again"));
-    } else {
-      alert("✅ Crop successful! Preview below.");
+      if (data.error) {
+        alert("❌ Error: " + (data.error || "Try again"));
+      } else {
+        alert("✅ Crop successful! Preview below.");
+      }
     }
-  }
+  }, [fetcher.data]);
 
   return (
     <s-page heading="Smart Crop — Minimal Version">
@@ -64,7 +66,10 @@ export default function CropPage() {
                   alt="cropped"
                   style={{ maxWidth: "100%", borderRadius: "8px" }}
                 />
-                <a href={result.mediaUpdates[0].croppedBase64} download="cropped.jpg">
+                <a
+                  href={result.mediaUpdates[0].croppedBase64}
+                  download="cropped.jpg"
+                >
                   Download cropped image
                 </a>
               </>
