@@ -1,29 +1,8 @@
-import { authenticate } from "../shopify.server";
-import { useAppBridge } from "@shopify/app-bridge-react";
+import { useFetcher } from "@remix-run/react";   // ← this is the line that was missing
 import { useState, useCallback } from "react";
-import { cropImagesWithOutputs } from "../lib/crop/client.server.js";
-
-export const loader = async () => ({});
-
-export const action = async ({ request }) => {
-  await authenticate.admin(request);
-  const formData = await request.formData();
-  const uploadedFiles = formData.getAll("file");
-
-  console.log(`=== ACTION: cropping ${uploadedFiles.length} file(s) ===`);
-
-  try {
-    const outputs = await cropImagesWithOutputs(uploadedFiles, { method: "auto", pipeline: "auto" });
-    console.log("=== ACTION SUCCESS ===", { count: outputs.length });
-    return Response.json({ status: "succeeded", mediaUpdates: outputs });
-  } catch (err) {
-    console.error("=== ACTION FAILED ===", err);
-    return Response.json({ error: err.message || "Crop failed" }, { status: 500 });
-  }
-};
 
 export default function CropPage() {
-  const shopify = useAppBridge();
+  const fetcher = useFetcher();
   const [files, setFiles] = useState([]);
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -35,35 +14,43 @@ export default function CropPage() {
     const form = new FormData();
     files.forEach((f) => form.append("file", f));
 
-    try {
-      const response = await shopify.fetch("/app/crop", { method: "POST", body: form });
-      const data = await response.json();
+    fetcher.submit(form, { method: "POST", action: "/app/crop" });
+  }, [files, fetcher]);
 
-      if (response.ok) {
-        setResult(data);
-        alert("✅ Crop successful! Preview below.");
-      } else {
-        alert("❌ Error: " + (data.error || "Try again"));
-      }
-    } catch (err) {
-      alert("Network error — check console");
-      console.error(err);
-    }
+  // Update result when response arrives
+  if (fetcher.data) {
+    const data = fetcher.data;
+    setResult(data);
     setLoading(false);
-  }, [files, shopify]);
+
+    if (data.error) {
+      alert("❌ Error: " + (data.error || "Try again"));
+    } else {
+      alert("✅ Crop successful! Preview below.");
+    }
+  }
 
   return (
     <s-page heading="Smart Crop — Minimal Version">
       <s-stack gap="base">
         <s-card>
           <s-heading>1. Select images</s-heading>
-          <input type="file" multiple accept="image/*" onChange={(e) => setFiles(Array.from(e.target.files))} />
+          <input
+            type="file"
+            multiple
+            accept="image/*"
+            onChange={(e) => setFiles(Array.from(e.target.files))}
+          />
         </s-card>
 
         <s-card>
           <s-heading>2. Click to crop</s-heading>
-          <s-button variant="primary" onClick={handleSubmit} disabled={loading || !files.length}>
-            {loading ? "Cropping..." : "Start Crop"}
+          <s-button
+            variant="primary"
+            onClick={handleSubmit}
+            disabled={loading || !files.length || fetcher.state === "submitting"}
+          >
+            {loading || fetcher.state === "submitting" ? "Cropping..." : "Start Crop"}
           </s-button>
         </s-card>
 
@@ -72,10 +59,10 @@ export default function CropPage() {
             <s-heading>3. Result</s-heading>
             {result.mediaUpdates?.[0]?.croppedBase64 ? (
               <>
-                <img 
-                  src={result.mediaUpdates[0].croppedBase64} 
-                  alt="cropped" 
-                  style={{ maxWidth: "100%", borderRadius: "8px" }} 
+                <img
+                  src={result.mediaUpdates[0].croppedBase64}
+                  alt="cropped"
+                  style={{ maxWidth: "100%", borderRadius: "8px" }}
                 />
                 <a href={result.mediaUpdates[0].croppedBase64} download="cropped.jpg">
                   Download cropped image
