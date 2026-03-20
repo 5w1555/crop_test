@@ -22,7 +22,11 @@ export const action = async ({ request }) => {
     return json({ status: "succeeded", mediaUpdates: outputs });
   } catch (err) {
     console.error("=== ACTION FAILED ===", err);
-    return json({ error: err.message || "Crop failed" }, { status: 500 });
+    return json({
+      error: err.message || "Crop failed",
+      errorCode: err.code || null,
+      errorDetails: err.details || null,
+    }, { status: 500 });
   }
 };
 
