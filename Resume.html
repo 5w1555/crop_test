@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>CV — Wafik Marwane</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: Georgia, serif;
+    font-size: 13px;
+    color: #111;
+    background: #fff;
+    padding: 2.5cm 2.5cm;
+    max-width: 21cm;
+    margin: 0 auto;
+  }
+
+  /* HEADER */
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 18px;
+    padding-bottom: 14px;
+    border-bottom: 2px solid #111;
+  }
+
+  .header-left h1 {
+    font-size: 24px;
+    font-weight: bold;
+    letter-spacing: 0.02em;
+    margin-bottom: 4px;
+  }
+
+  .header-left .subtitle {
+    font-size: 12px;
+    color: #444;
+    margin-bottom: 8px;
+  }
+
+  .header-left .contact {
+    font-size: 11.5px;
+    line-height: 1.7;
+    font-family: Arial, sans-serif;
+    color: #222;
+  }
+
+  .header-left .contact a {
+    color: #222;
+    text-decoration: none;
+  }
+
+
+
+  /* SECTION */
+  h2 {
+    font-size: 12px;
+    font-family: Arial, sans-serif;
+    text-transform: uppercase;
+    letter-spacing: 0.12em;
+    font-weight: bold;
+    margin-bottom: 8px;
+    padding-bottom: 3px;
+    border-bottom: 1px solid #ccc;
+    margin-top: 18px;
+  }
+
+  /* INTRO */
+  .intro {
+    font-size: 12.5px;
+    line-height: 1.65;
+    color: #333;
+    margin-bottom: 4px;
+  }
+
+  /* JOB */
+  .job {
+    margin-bottom: 12px;
+  }
+
+  .job-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+
+  .job-title {
+    font-weight: bold;
+    font-size: 13px;
+  }
+
+  .job-period {
+    font-family: Arial, sans-serif;
+    font-size: 11.5px;
+    color: #555;
+  }
+
+  .job ul {
+    padding-left: 16px;
+    list-style: disc;
+    margin-top: 4px;
+  }
+
+  .job li {
+    font-size: 12px;
+    line-height: 1.6;
+    color: #222;
+  }
+
+  /* SKILLS */
+  .skills-line {
+    font-size: 12.5px;
+    line-height: 1.75;
+  }
+
+  /* FORMATION */
+  .edu-item {
+    margin-bottom: 7px;
+    font-size: 12.5px;
+    line-height: 1.55;
+  }
+
+  /* LANGUES / DISPO */
+  .two-col {
+    display: flex;
+    gap: 3cm;
+  }
+
+  table.langs {
+    border-collapse: collapse;
+    font-size: 12.5px;
+  }
+
+  table.langs td {
+    padding: 2px 10px 2px 0;
+  }
+
+  @media print {
+    body { padding: 1.8cm 2cm; }
+  }
+</style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="header-left">
+      <h1>Wafik Marwane</h1>
+      <div class="subtitle">Manutention · Logistique · Support technique</div>
+      <div class="contact">
+        Gennevilliers (92230) — Mobilité Île-de-France<br>
+        07 81 32 38 03 · <a href="/cdn-cgi/l/email-protection#024f637075636c677563646b693042656f636b6e2c616d6f"><span class="__cf_email__" data-cfemail="2d604c5f5a4c43485a4c4b44461f6d4a404c4441034e4240">[email&#160;protected]</span></a><br>
+        <a href="https://github.com/5w1555">github.com/5w1555</a>
+      </div>
+    </div>
+
+  </div>
+
+  <h2>Profil</h2>
+  <p class="intro">
+    Motivé, fiable et en forme. 2 ans d'expérience en service client, compétences en automatisation et dépannage multi-environnements. Disponible immédiatement pour missions intérim — 7j/7, horaires flexibles.
+  </p>
+
+  <h2>Expériences</h2>
+
+  <div class="job">
+    <div class="job-header">
+      <span class="job-title">Téléconseiller pour bailleurs</span>
+      <span class="job-period">2 ans — Boulogne-Billancourt</span>
+    </div>
+    <ul>
+      <li>Prise en charge d'appels entrants, conseil et résolution de problèmes locatifs</li>
+      <li>Gestion de situations tendues et suivi administratif quotidien</li>
+      <li>Rigueur, ponctualité, travail sous pression et en équipe</li>
+    </ul>
+  </div>
+
+  <div class="job">
+    <div class="job-header">
+      <span class="job-title">Cropanyware — Pipeline d'imagerie AI & automatisation</span>
+      <span class="job-period">2023 — présent</span>
+    </div>
+    <ul>
+      <li>Pipeline batch (ingestion, framing, transformation) sur gros volumes d'assets</li>
+      <li>Exécution reproductible avec Docker, accès distant via VPN pour équipes distribuées</li>
+      <li>Réduction du temps de préparation de plusieurs heures à quelques minutes</li>
+    </ul>
+  </div>
+
+  <div class="job">
+    <div class="job-header">
+      <span class="job-title">Sanitor — Analyseur statique & outils internes</span>
+      <span class="job-period">2023</span>
+    </div>
+    <ul>
+      <li>Détection d'anomalies dans le code source, intégration CI/CD</li>
+      <li>Réduction du temps de déploiement de 45 min à 3 min</li>
+    </ul>
+  </div>
+
+  <div class="job">
+    <div class="job-header">
+      <span class="job-title">Infrastructure, CI/CD & Accès distant sécurisé</span>
+    </div>
+    <ul>
+      <li>Configuration Docker, GitHub Actions, Nginx, reverse proxy, SSL</li>
+      <li>Diagnostic VPN/DNS sur endpoints internationaux — services stables et monitorés</li>
+    </ul>
+  </div>
+
+  <h2>Compétences</h2>
+  <p class="skills-line">
+    Manutention & travail physique · Support technique multi-OS (Linux, Windows, macOS) · Python · Docker · CI/CD · Scripting · VPN / SSH · GitHub Actions · Nginx
+  </p>
+
+  <h2>Formation</h2>
+  <div class="edu-item">
+    <strong>Développeur Python (RNCP 6)</strong> — OpenClassrooms, 2024-2025 (en cours)
+  </div>
+  <div class="edu-item">
+    <strong>Licence Psychologie</strong> — Université Paris 8, 2019–2022
+  </div>
+
+  <div class="two-col">
+    <div>
+      <h2>Langues</h2>
+      <table class="langs">
+        <tr><td>Français</td><td>Langue maternelle</td></tr>
+        <tr><td>Anglais</td><td>C2</td></tr>
+      </table>
+    </div>
+    <div>
+      <h2>Disponibilité</h2>

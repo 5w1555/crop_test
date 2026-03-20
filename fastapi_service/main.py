@@ -2620,6 +2620,7 @@ async def crop_batch_endpoint(
                     "outputFilename": output_filename,
                     "contentType": output_info["media_type"],
                     "bytes": output_bytes,
+                    "croppedBase64": f"data:{output_info['media_type']};base64,{base64.b64encode(output_binary).decode('ascii')}",
                     "idempotencyKey": None,
                     "mutationOutcome": "batch_crop",
                     "error": None,
