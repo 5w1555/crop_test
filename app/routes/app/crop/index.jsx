@@ -1,5 +1,5 @@
 import { authenticate } from "../../../shopify.server";
-import { json } from "react-router";  // ← correct import for your 2026 template
+import { data } from "react-router";
 import { cropImagesWithOutputs } from "../../../lib/crop/client.server.js";
 
 export const loader = async () => ({}); // empty loader (or you can redirect("/app") if you want)
@@ -19,10 +19,10 @@ export const action = async ({ request }) => {
     });
 
     console.log("=== ACTION SUCCESS ===", { count: outputs.length });
-    return json({ status: "succeeded", mediaUpdates: outputs });
+    return data({ status: "succeeded", mediaUpdates: outputs });
   } catch (err) {
     console.error("=== ACTION FAILED ===", err);
-    return json({
+    return data({
       error: err.message || "Crop failed",
       errorCode: err.code || null,
       errorDetails: err.details || null,
