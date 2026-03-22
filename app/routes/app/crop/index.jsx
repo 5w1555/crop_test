@@ -1,6 +1,7 @@
 import { authenticate } from "../../../shopify.server";
 import { data } from "react-router";
 import { cropImagesWithOutputs } from "../../../lib/crop/client.server.js";
+import CropControlCenter from "../../../components/CropControlCenter.jsx";
 
 export const loader = async () => ({}); // empty loader (or you can redirect("/app") if you want)
 
@@ -31,5 +32,5 @@ export const action = async ({ request }) => {
 };
 
 export default function CropRoute() {
-  return null; // this route is ONLY for the action — never shows UI
+  return <CropControlCenter />;
 }
