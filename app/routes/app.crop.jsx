@@ -1,9 +1,12 @@
-import { authenticate } from "../../../shopify.server";
 import { data } from "react-router";
-import { cropImagesWithOutputs } from "../../../lib/crop/client.server.js";
-import CropControlCenter from "../../../components/CropControlCenter.jsx";
+import CropControlCenter from "../components/CropControlCenter.jsx";
+import { cropImagesWithOutputs } from "../lib/crop/client.server.js";
+import { authenticate } from "../shopify.server";
 
-export const loader = async () => ({}); // empty loader (or you can redirect("/app") if you want)
+export const loader = async ({ request }) => {
+  await authenticate.admin(request);
+  return {};
+};
 
 export const action = async ({ request }) => {
   await authenticate.admin(request);
@@ -23,11 +26,14 @@ export const action = async ({ request }) => {
     return data({ status: "succeeded", mediaUpdates: outputs });
   } catch (err) {
     console.error("=== ACTION FAILED ===", err);
-    return data({
-      error: err.message || "Crop failed",
-      errorCode: err.code || null,
-      errorDetails: err.details || null,
-    }, { status: 500 });
+    return data(
+      {
+        error: err.message || "Crop failed",
+        errorCode: err.code || null,
+        errorDetails: err.details || null,
+      },
+      { status: 500 },
+    );
   }
 };
 
