@@ -157,6 +157,14 @@ Example parity check:
 - `SHOPIFY_APP_URL=https://smart-crop-app.onrender.com`
 - `shopify.app.toml` -> `application_url = "https://smart-crop-app.onrender.com"`
 
+### Why Shopify CLI preview can show "Enter your shop domain"
+
+When this app is run with `shopify app dev`, opening the raw preview URL directly can show the login form asking for a shop domain. This happens when the request does not include a `shop` query parameter (store context), which is required for embedded app auth bootstrap.
+
+Expected behavior:
+- Opening from Shopify Admin (embedded launch) or via the CLI install/open flow includes the required shop context.
+- Opening the bare preview URL manually may not include `shop`, so the auth helper falls back to the domain-entry form.
+
 The server now validates this at startup and logs a clear mismatch message because this is a common root cause of immediate session-expired loops after OAuth.
 
 ### 3) Render deployment baseline
