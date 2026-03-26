@@ -2,14 +2,20 @@ import { data } from "react-router";
 import CropControlCenter from "../components/CropControlCenter.jsx";
 import { cropImagesWithOutputs } from "../lib/crop/client.server.js";
 import { authenticate } from "../shopify.server";
+import { isPreviewRequest } from "../lib/shopify-auth.server";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  if (!isPreviewRequest(request)) {
+    await authenticate.admin(request);
+  }
+
   return {};
 };
 
 export const action = async ({ request }) => {
-  await authenticate.admin(request);
+  if (!isPreviewRequest(request)) {
+    await authenticate.admin(request);
+  }
 
   const formData = await request.formData();
   const uploadedFiles = formData.getAll("file");

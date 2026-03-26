@@ -3,15 +3,37 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { AppProvider } from "@shopify/shopify-app-react-router/react"
 import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
+import { isPreviewRequest } from "../lib/shopify-auth.server";
 
 export const loader = async ({ request }) => {
-  await authenticate.admin(request);
+  const previewMode = isPreviewRequest(request);
+
+  if (!previewMode) {
+    await authenticate.admin(request);
+  }
+
   // AppProvider needs the API key to initialize AppBridge in the iframe
-  return { apiKey: process.env.SHOPIFY_API_KEY };
+  return { apiKey: process.env.SHOPIFY_API_KEY, previewMode };
 };
 
 export default function App() {
-  const { apiKey } = useLoaderData();
+  const { apiKey, previewMode } = useLoaderData();
+
+  if (previewMode) {
+    return (
+      <>
+        <s-page heading="Smart Crop App (Preview mode)">
+          <s-stack gap="base">
+            <s-paragraph>
+              Running without Shopify auth so the front-end can be tested from the preview URL.
+            </s-paragraph>
+            <s-link to="/app/crop?preview=1">Open Smart Crop</s-link>
+          </s-stack>
+        </s-page>
+        <Outlet />
+      </>
+    );
+  }
 
   return (
     // isEmbeddedApp tells AppBridge this runs inside the Shopify Admin iframe
