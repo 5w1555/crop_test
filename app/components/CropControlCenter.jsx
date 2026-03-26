@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types */
 import { useEffect, useMemo, useState } from "react";
-import { useFetcher } from "react-router";
+import { useFetcher, useLocation } from "react-router";
 
 const tokens = {
   radius: "10px",
@@ -237,14 +237,19 @@ function getCropSummary(result) {
 export default function CropControlCenter() {
   const cropFetcher = useFetcher();
   const statusFetcher = useFetcher();
+  const location = useLocation();
   const [files, setFiles] = useState([]);
   const [result, setResult] = useState(null);
 
+  const previewQuery = location.search || "";
+  const apiStatusPath = `/app/api-status${previewQuery}`;
+  const cropActionPath = `/app/crop${previewQuery}`;
+
   useEffect(() => {
     if (statusFetcher.state === "idle" && !statusFetcher.data) {
-      statusFetcher.load("/app/api-status");
+      statusFetcher.load(apiStatusPath);
     }
-  }, [statusFetcher]);
+  }, [apiStatusPath, statusFetcher]);
 
   useEffect(() => {
     if (cropFetcher.data) setResult(cropFetcher.data);
@@ -270,7 +275,7 @@ export default function CropControlCenter() {
   const handleCrop = () => {
     const form = new FormData();
     files.forEach((file) => form.append("file", file));
-    cropFetcher.submit(form, { method: "POST", action: "/app/crop" });
+    cropFetcher.submit(form, { method: "POST", action: cropActionPath });
   };
 
   return (
@@ -286,7 +291,7 @@ export default function CropControlCenter() {
             <Badge tone={status.tone}>{status.title}</Badge>
             <Button
               variant="secondary"
-              onClick={() => statusFetcher.load("/app/api-status")}
+              onClick={() => statusFetcher.load(apiStatusPath)}
               disabled={isCheckingApi}
             >
               {isCheckingApi ? "Checking…" : "Re-check API"}
