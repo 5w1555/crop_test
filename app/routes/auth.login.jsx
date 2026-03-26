@@ -29,6 +29,13 @@ export default function Auth() {
       <s-page>
         <Form method="post">
           <s-section heading="Log in">
+            <s-paragraph>
+              If you opened the Shopify CLI preview URL directly, you may land
+              here because the URL is missing a <code>shop=...</code> query
+              parameter. Open the app from your Shopify Admin (or use the
+              install link from <code>shopify app dev</code>) to include shop
+              context automatically.
+            </s-paragraph>
             <s-text-field
               name="shop"
               label="Shop domain"
