@@ -3,6 +3,9 @@ import { useState } from "react";
 import { Form, useActionData, useLoaderData } from "react-router";
 import { login } from "../shopify.server.js";
 import { loginErrorMessage } from "./auth.error.jsx";
+import { boundary } from "@shopify/shopify-app-react-router/server";
+
+export const headers = (headersArgs) => boundary.headers(headersArgs);
 
 export const loader = async ({ request }) => {
   const errors = loginErrorMessage(await login(request));
