@@ -175,6 +175,19 @@ function formatUnexpectedResponse(response, rawBody) {
   return `Unexpected non-JSON response from server (${responseDescriptor}, ${contentType})${snippet ? `: ${snippet}` : ""}`;
 }
 
+function resolveResultMediaUpdates(resultPayload) {
+  if (!resultPayload) return [];
+  if (Array.isArray(resultPayload)) return resultPayload;
+  if (Array.isArray(resultPayload.mediaUpdates)) return resultPayload.mediaUpdates;
+  return [];
+}
+
+function buildDownloadFileName(mediaUpdate, index) {
+  const sourceName = mediaUpdate?.filename || mediaUpdate?.sourceFilename || `cropped-image-${index + 1}`;
+  if (/\.[a-zA-Z0-9]+$/.test(sourceName)) return sourceName;
+  return `${sourceName}.jpg`;
+}
+
 export default function CropControlCenter() {
   const location = useLocation();
   const previewMode = new URLSearchParams(location.search).get("preview") === "1";
@@ -212,7 +225,12 @@ export default function CropControlCenter() {
     };
   }, [beforeImage, sourceType]);
 
-  const firstAfterImage = result?.mediaUpdates?.[0]?.croppedBase64 || null;
+  const mediaUpdates = useMemo(() => resolveResultMediaUpdates(result), [result]);
+  const successfulMediaUpdates = useMemo(
+    () => mediaUpdates.filter((update) => update?.croppedBase64 && update?.status !== "failed"),
+    [mediaUpdates],
+  );
+  const firstAfterImage = successfulMediaUpdates[0]?.croppedBase64 || null;
 
   const handleSearch = async () => {
     if (!searchTerm.trim()) {
@@ -291,6 +309,17 @@ export default function CropControlCenter() {
     } finally {
       setIsCropping(false);
     }
+  };
+
+  const handleDownloadAll = () => {
+    successfulMediaUpdates.forEach((mediaUpdate, index) => {
+      const link = document.createElement("a");
+      link.href = mediaUpdate.croppedBase64;
+      link.download = buildDownloadFileName(mediaUpdate, index);
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    });
   };
 
   return (
@@ -403,7 +432,11 @@ export default function CropControlCenter() {
             <Button variant="primary" onClick={handleCrop} disabled={!canCrop || isCropping}>
               {isCropping ? "Cropping…" : "Crop image"}
             </Button>
-            {result?.status === "succeeded" ? <Badge tone="success">Crop completed</Badge> : null}
+            {result?.status === "succeeded" || result?.status === "partial_failure" ? (
+              <Badge tone={result?.status === "partial_failure" ? "info" : "success"}>
+                {result?.status === "partial_failure" ? "Crop completed (partial)" : "Crop completed"}
+              </Badge>
+            ) : null}
           </Inline>
           {errorMessage ? <Banner tone="critical">{errorMessage}</Banner> : null}
         </Stack>
@@ -424,12 +457,53 @@ export default function CropControlCenter() {
         <Card>
           <Stack gap="small">
             <Heading>After</Heading>
-            {firstAfterImage ? (
+            {mediaUpdates.length ? (
               <>
-                <img src={firstAfterImage} alt="After crop" style={{ width: "100%", borderRadius: 10 }} />
-                <a href={firstAfterImage} download="cropped-image.jpg" style={{ fontSize: "14px" }}>
-                  Download cropped image
-                </a>
+                {firstAfterImage ? <img src={firstAfterImage} alt="After crop" style={{ width: "100%", borderRadius: 10 }} /> : null}
+                <Inline>
+                  {firstAfterImage ? (
+                    <a
+                      href={firstAfterImage}
+                      download={buildDownloadFileName(successfulMediaUpdates[0], 0)}
+                      style={{ fontSize: "14px" }}
+                    >
+                      Download first cropped image
+                    </a>
+                  ) : null}
+                  {successfulMediaUpdates.length > 0 ? (
+                    <Button onClick={handleDownloadAll}>Download cropped images</Button>
+                  ) : null}
+                </Inline>
+                <Stack gap="small">
+                  {mediaUpdates.map((mediaUpdate, index) => {
+                    const hasImage = Boolean(mediaUpdate?.croppedBase64);
+                    const filename = buildDownloadFileName(mediaUpdate, index);
+                    return (
+                      <div
+                        key={`${filename}-${index}`}
+                        style={{
+                          border: `1px solid ${tokens.colors.border}`,
+                          borderRadius: 8,
+                          padding: "10px 12px",
+                        }}
+                      >
+                        <Inline>
+                          <Paragraph>
+                            <strong>{filename}</strong>
+                          </Paragraph>
+                          <Badge tone={mediaUpdate?.status === "failed" ? "critical" : "success"}>
+                            {mediaUpdate?.status || (hasImage ? "updated" : "unknown")}
+                          </Badge>
+                          {hasImage ? (
+                            <a href={mediaUpdate.croppedBase64} download={filename} style={{ fontSize: "14px" }}>
+                              Download
+                            </a>
+                          ) : null}
+                        </Inline>
+                      </div>
+                    );
+                  })}
+                </Stack>
               </>
             ) : (
               <Paragraph>Crop an image to view output.</Paragraph>

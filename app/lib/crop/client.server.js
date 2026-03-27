@@ -171,7 +171,25 @@ export async function cropImagesWithOutputs(files, options = {}, { signal } = {}
     }
 
     // FastAPI canonical shape: { status, mediaUpdates, summary, errors }
-    return Array.isArray(payload) ? payload : payload?.mediaUpdates || [];
+    if (Array.isArray(payload)) {
+      return {
+        status: "succeeded",
+        mediaUpdates: payload,
+        summary: {
+          requestedCount: payload.length,
+          succeededCount: payload.length,
+          failedCount: 0,
+        },
+        errors: [],
+      };
+    }
+
+    return {
+      status: payload?.status || "succeeded",
+      mediaUpdates: Array.isArray(payload?.mediaUpdates) ? payload.mediaUpdates : [],
+      summary: payload?.summary || null,
+      errors: Array.isArray(payload?.errors) ? payload.errors : [],
+    };
   } catch (error) {
     const normalized = normalizeError(error);
     const enrichedError = new Error(normalized.message);
