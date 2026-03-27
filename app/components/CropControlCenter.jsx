@@ -1,6 +1,6 @@
 /* eslint-disable react/prop-types */
 import { useEffect, useMemo, useState } from "react";
-import { useFetcher, useLocation } from "react-router";
+import { useLocation } from "react-router";
 
 const tokens = {
   radius: "10px",
@@ -16,7 +16,6 @@ const tokens = {
     primaryHover: "#006e52",
     info: { bg: "#eff6ff", text: "#1d4ed8", border: "#bfdbfe" },
     success: { bg: "#f0fdf4", text: "#166534", border: "#bbf7d0" },
-    warning: { bg: "#fffbeb", text: "#92400e", border: "#fde68a" },
     critical: { bg: "#fef2f2", text: "#991b1b", border: "#fecaca" },
   },
 };
@@ -38,14 +37,7 @@ function Page({ heading, children }) {
         color: tokens.colors.text,
       }}
     >
-      <h1
-        style={{
-          fontSize: "22px",
-          fontWeight: 700,
-          marginBottom: "24px",
-          letterSpacing: "-0.3px",
-        }}
-      >
+      <h1 style={{ fontSize: "22px", fontWeight: 700, marginBottom: "24px", letterSpacing: "-0.3px" }}>
         {heading}
       </h1>
       <Stack gap="large">{children}</Stack>
@@ -70,23 +62,12 @@ function Card({ children }) {
 }
 
 function Stack({ gap = "base", children }) {
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: tokens.gap[gap] ?? gap }}>
-      {children}
-    </div>
-  );
+  return <div style={{ display: "flex", flexDirection: "column", gap: tokens.gap[gap] ?? gap }}>{children}</div>;
 }
 
 function Inline({ gap = "base", children }) {
   return (
-    <div
-      style={{
-        display: "flex",
-        flexWrap: "wrap",
-        alignItems: "center",
-        gap: tokens.gap[gap] ?? gap,
-      }}
-    >
+    <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: tokens.gap[gap] ?? gap }}>
       {children}
     </div>
   );
@@ -111,11 +92,7 @@ function Heading({ children }) {
 }
 
 function Paragraph({ children }) {
-  return (
-    <p style={{ fontSize: "14px", lineHeight: 1.6, margin: 0, color: tokens.colors.text }}>
-      {children}
-    </p>
-  );
+  return <p style={{ fontSize: "14px", lineHeight: 1.6, margin: 0, color: tokens.colors.text }}>{children}</p>;
 }
 
 function Badge({ tone = "info", children }) {
@@ -138,14 +115,7 @@ function Badge({ tone = "info", children }) {
 
 function Banner({ tone = "info", children }) {
   return (
-    <div
-      style={{
-        ...toneStyle(tone),
-        borderRadius: tokens.radius,
-        padding: "12px 16px",
-        fontSize: "14px",
-      }}
-    >
+    <div style={{ ...toneStyle(tone), borderRadius: tokens.radius, padding: "12px 16px", fontSize: "14px" }}>
       {children}
     </div>
   );
@@ -170,13 +140,6 @@ function Button({ variant = "secondary", onClick, disabled, children }) {
         border: isPrimary ? "none" : `1px solid ${tokens.colors.border}`,
         background: isPrimary ? tokens.colors.primary : tokens.colors.surface,
         color: isPrimary ? "#fff" : tokens.colors.text,
-        transition: "background 0.15s",
-      }}
-      onMouseEnter={(e) => {
-        if (!disabled && isPrimary) e.currentTarget.style.background = tokens.colors.primaryHover;
-      }}
-      onMouseLeave={(e) => {
-        if (!disabled && isPrimary) e.currentTarget.style.background = tokens.colors.primary;
       }}
     >
       {children}
@@ -184,232 +147,256 @@ function Button({ variant = "secondary", onClick, disabled, children }) {
   );
 }
 
-const defaultStatus = {
-  tone: "info",
-  title: "Checking Smart Crop API",
-  description:
-    "Running a live probe through the app server so the browser can verify the backend connection.",
-};
-
-function getStatusPresentation(data) {
-  if (!data) return defaultStatus;
-  if (data.ok) {
-    return {
-      tone: "success",
-      title: "API is reachable",
-      description: `The Smart Crop API responded${data.status ? ` with HTTP ${data.status}` : ""}.`,
-    };
-  }
-  return {
-    tone: "critical",
-    title: "API is not reachable from the app",
-    description:
-      data.error ||
-      data.details ||
-      "The probe did not complete successfully. Review the diagnostics below.",
-  };
-}
-
-function getCropSummary(result) {
-  if (!result) {
-    return {
-      tone: "info",
-      title: "No crop run yet",
-      description: "Upload at least one image and start the crop flow to see output here.",
-    };
-  }
-  if (result.error) {
-    return {
-      tone: "critical",
-      title: "Crop failed",
-      description: result.errorDetails || result.error,
-    };
-  }
-  return {
-    tone: "success",
-    title: "Crop completed",
-    description: `Received ${result.mediaUpdates?.length || 0} cropped asset${
-      result.mediaUpdates?.length === 1 ? "" : "s"
-    } from the API.`,
-  };
-}
+const EMPTY_MARGINS = { top: "", right: "", bottom: "", left: "" };
 
 export default function CropControlCenter() {
-  const cropFetcher = useFetcher();
-  const statusFetcher = useFetcher();
   const location = useLocation();
-  const [files, setFiles] = useState([]);
-  const [result, setResult] = useState(null);
-
   const previewQuery = location.search || "";
-  const apiStatusPath = `/app/api-status${previewQuery}`;
   const cropActionPath = `/app/crop${previewQuery}`;
+  const productsPath = `/app/products${previewQuery}`;
+
+  const [sourceType, setSourceType] = useState("upload");
+  const [files, setFiles] = useState([]);
+  const [searchTerm, setSearchTerm] = useState("");
+  const [isSearching, setIsSearching] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [selectedImageUrl, setSelectedImageUrl] = useState("");
+  const [method, setMethod] = useState("auto");
+  const [targetAspectRatio, setTargetAspectRatio] = useState("");
+  const [margins, setMargins] = useState(EMPTY_MARGINS);
+  const [isCropping, setIsCropping] = useState(false);
+  const [result, setResult] = useState(null);
+  const [errorMessage, setErrorMessage] = useState("");
+
+  const canCrop = sourceType === "upload" ? files.length > 0 : Boolean(selectedImageUrl);
+
+  const beforeImage = useMemo(() => {
+    if (sourceType === "shopify") return selectedImageUrl || null;
+    if (!files.length) return null;
+    return URL.createObjectURL(files[0]);
+  }, [files, selectedImageUrl, sourceType]);
 
   useEffect(() => {
-    if (statusFetcher.state === "idle" && !statusFetcher.data) {
-      statusFetcher.load(apiStatusPath);
+    if (sourceType !== "upload") return undefined;
+    if (!beforeImage) return undefined;
+
+    return () => {
+      URL.revokeObjectURL(beforeImage);
+    };
+  }, [beforeImage, sourceType]);
+
+  const firstAfterImage = result?.mediaUpdates?.[0]?.croppedBase64 || null;
+
+  const handleSearch = async () => {
+    if (!searchTerm.trim()) {
+      setProducts([]);
+      return;
     }
-  }, [apiStatusPath, statusFetcher]);
 
-  useEffect(() => {
-    if (cropFetcher.data) setResult(cropFetcher.data);
-  }, [cropFetcher.data]);
+    setIsSearching(true);
+    setErrorMessage("");
 
-  const selectedFileSummary = useMemo(
-    () =>
-      files.map((file) => ({
-        name: file.name,
-        size: `${(file.size / 1024 / 1024).toFixed(2)} MB`,
-        type: file.type || "unknown",
-      })),
-    [files],
-  );
+    try {
+      const response = await fetch(`${productsPath}${previewQuery ? "&" : "?"}q=${encodeURIComponent(searchTerm.trim())}`);
+      const payload = await response.json();
 
-  const status = getStatusPresentation(statusFetcher.data);
-  const cropSummary = getCropSummary(result);
-  const isCropping = cropFetcher.state !== "idle";
-  const isCheckingApi = statusFetcher.state !== "idle";
-  const canCrop = files.length > 0 && statusFetcher.data?.ok;
-  const firstImage = result?.mediaUpdates?.[0]?.croppedBase64;
+      if (!response.ok) {
+        throw new Error(payload?.errors?.[0]?.message || "Product search failed");
+      }
 
-  const handleCrop = () => {
+      setProducts(payload.products || []);
+      if ((payload.products || []).length === 0) {
+        setSelectedImageUrl("");
+      }
+    } catch (error) {
+      setErrorMessage(error.message || "Product search failed");
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
+  const handleCrop = async () => {
+    setIsCropping(true);
+    setErrorMessage("");
+    setResult(null);
+
     const form = new FormData();
-    files.forEach((file) => form.append("file", file));
-    cropFetcher.submit(form, { method: "POST", action: cropActionPath });
+
+    if (sourceType === "upload") {
+      files.forEach((file) => form.append("file", file));
+    } else if (selectedImageUrl) {
+      form.append("imageUrl", selectedImageUrl);
+    }
+
+    form.append("method", method);
+    if (targetAspectRatio !== "") form.append("targetAspectRatio", targetAspectRatio);
+    if (margins.top !== "") form.append("marginTop", margins.top);
+    if (margins.right !== "") form.append("marginRight", margins.right);
+    if (margins.bottom !== "") form.append("marginBottom", margins.bottom);
+    if (margins.left !== "") form.append("marginLeft", margins.left);
+
+    try {
+      const response = await fetch(cropActionPath, {
+        method: "POST",
+        body: form,
+      });
+      const payload = await response.json();
+      setResult(payload);
+
+      if (!response.ok || payload.error) {
+        setErrorMessage(payload.errorDetails || payload.error || "Crop failed");
+      }
+    } catch (error) {
+      setErrorMessage(error.message || "Crop failed");
+    } finally {
+      setIsCropping(false);
+    }
   };
 
   return (
     <Page heading="Smart Crop Control Center">
       <Card>
-        <Stack gap="base">
-          <Heading>Run image cropping from one place</Heading>
-          <Paragraph>
-            This page combines onboarding, a live API health probe, upload preparation, and crop
-            execution so you can validate the integration before processing files.
-          </Paragraph>
-          <Inline gap="base">
-            <Badge tone={status.tone}>{status.title}</Badge>
-            <Button
-              variant="secondary"
-              onClick={() => statusFetcher.load(apiStatusPath)}
-              disabled={isCheckingApi}
-            >
-              {isCheckingApi ? "Checking…" : "Re-check API"}
-            </Button>
+        <Stack gap="small">
+          <Heading>Source</Heading>
+          <Inline>
+            <label style={{ fontSize: "14px" }}>
+              <input
+                type="radio"
+                name="sourceType"
+                value="upload"
+                checked={sourceType === "upload"}
+                onChange={() => setSourceType("upload")}
+              />{" "}
+              Local upload
+            </label>
+            <label style={{ fontSize: "14px" }}>
+              <input
+                type="radio"
+                name="sourceType"
+                value="shopify"
+                checked={sourceType === "shopify"}
+                onChange={() => setSourceType("shopify")}
+              />{" "}
+              Shopify product search
+            </label>
           </Inline>
-          <Paragraph>{status.description}</Paragraph>
-        </Stack>
-      </Card>
 
-      <Grid columns={2} gap="base">
-        <Card>
-          <Stack gap="small">
-            <Heading>Connection diagnostics</Heading>
-            <Paragraph>
-              <strong>Endpoint:</strong> {statusFetcher.data?.apiBase || "Checking…"}
-            </Paragraph>
-            <Paragraph>
-              <strong>HTTP status:</strong> {statusFetcher.data?.status ?? "n/a"}
-            </Paragraph>
-            <Paragraph>
-              <strong>Details:</strong> {statusFetcher.data?.details || "Waiting for probe."}
-            </Paragraph>
-            {!statusFetcher.data?.ok && statusFetcher.data?.error ? (
-              <Banner tone="critical">{statusFetcher.data.error}</Banner>
-            ) : null}
-          </Stack>
-        </Card>
-
-        <Card>
-          <Stack gap="small">
-            <Heading>What to fix if the probe fails</Heading>
-            <Paragraph>
-              The browser checks the API through <code>/app/api-status</code>, and crop jobs are
-              sent through <code>/app/crop</code>. If the probe fails, the likely cause is that the
-              app server cannot reach <code>SMARTCROP_API_URL</code>.
-            </Paragraph>
-            <Paragraph>
-              Update the environment variable to a reachable Smart Crop backend, confirm outbound
-              access from the server environment, then re-run the probe from this page.
-            </Paragraph>
-          </Stack>
-        </Card>
-      </Grid>
-
-      <Card>
-        <Stack gap="base">
-          <Heading>Upload queue</Heading>
-          <input
-            type="file"
-            multiple
-            accept="image/*"
-            style={{ fontSize: "14px" }}
-            onChange={(e) => setFiles(Array.from(e.target.files || []))}
-          />
-          {selectedFileSummary.length ? (
+          {sourceType === "upload" ? (
+            <input type="file" multiple accept="image/*" onChange={(e) => setFiles(Array.from(e.target.files || []))} />
+          ) : (
             <Stack gap="small">
-              {selectedFileSummary.map((file) => (
-                <Paragraph key={`${file.name}-${file.size}`}>
-                  <strong>{file.name}</strong> — {file.type} — {file.size}
-                </Paragraph>
+              <Inline>
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search products by title"
+                  style={{ flex: 1, minWidth: 250, padding: "8px", borderRadius: 8, border: `1px solid ${tokens.colors.border}` }}
+                />
+                <Button onClick={handleSearch} disabled={isSearching}>{isSearching ? "Searching…" : "Search"}</Button>
+              </Inline>
+              {products.map((product) => (
+                <Stack key={product.id} gap="small">
+                  <Paragraph><strong>{product.title}</strong></Paragraph>
+                  <Inline>
+                    {product.imageUrls.map((imageUrl) => (
+                      <button
+                        key={imageUrl}
+                        onClick={() => setSelectedImageUrl(imageUrl)}
+                        style={{
+                          border: selectedImageUrl === imageUrl ? `2px solid ${tokens.colors.primary}` : `1px solid ${tokens.colors.border}`,
+                          borderRadius: 8,
+                          padding: 0,
+                          background: "transparent",
+                          cursor: "pointer",
+                        }}
+                      >
+                        <img src={imageUrl} alt={product.title} style={{ width: 84, height: 84, objectFit: "cover", borderRadius: 8 }} />
+                      </button>
+                    ))}
+                  </Inline>
+                </Stack>
               ))}
             </Stack>
-          ) : (
-            <Paragraph>No files selected yet.</Paragraph>
           )}
-          <Inline gap="base">
-            <Button variant="primary" onClick={handleCrop} disabled={!canCrop || isCropping}>
-              {isCropping ? "Cropping…" : "Start crop"}
-            </Button>
-            {!statusFetcher.data?.ok ? (
-              <Badge tone="warning">Fix API access before cropping</Badge>
-            ) : null}
-          </Inline>
         </Stack>
       </Card>
 
-      <Grid columns={2} gap="base">
+      <Card>
+        <Stack gap="small">
+          <Heading>Crop settings</Heading>
+          <Inline>
+            <label style={{ fontSize: "14px" }}>
+              Method{" "}
+              <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ marginLeft: 8 }}>
+                <option value="auto">auto</option>
+                <option value="manual">manual</option>
+              </select>
+            </label>
+            <label style={{ fontSize: "14px" }}>
+              Target aspect ratio{" "}
+              <input
+                type="number"
+                step="0.01"
+                value={targetAspectRatio}
+                onChange={(e) => setTargetAspectRatio(e.target.value)}
+                placeholder="e.g. 1.00"
+                style={{ marginLeft: 8, width: 100 }}
+              />
+            </label>
+          </Inline>
+          <Grid columns={4}>
+            {Object.keys(margins).map((side) => (
+              <label key={side} style={{ fontSize: "14px" }}>
+                {side}
+                <input
+                  type="number"
+                  step="1"
+                  value={margins[side]}
+                  onChange={(e) => setMargins((prev) => ({ ...prev, [side]: e.target.value }))}
+                  style={{ marginLeft: 8, width: 72 }}
+                />
+              </label>
+            ))}
+          </Grid>
+          <Inline>
+            <Button variant="primary" onClick={handleCrop} disabled={!canCrop || isCropping}>
+              {isCropping ? "Cropping…" : "Crop image"}
+            </Button>
+            {result?.status === "succeeded" ? <Badge tone="success">Crop completed</Badge> : null}
+          </Inline>
+          {errorMessage ? <Banner tone="critical">{errorMessage}</Banner> : null}
+        </Stack>
+      </Card>
+
+      <Grid columns={2}>
         <Card>
           <Stack gap="small">
-            <Heading>Crop run status</Heading>
-            <Badge tone={cropSummary.tone}>{cropSummary.title}</Badge>
-            <Paragraph>{cropSummary.description}</Paragraph>
-            {result?.error ? (
-              <Banner tone="critical">{result.errorDetails || result.error}</Banner>
-            ) : null}
+            <Heading>Before</Heading>
+            {beforeImage ? (
+              <img src={beforeImage} alt="Before crop" style={{ width: "100%", borderRadius: 10 }} />
+            ) : (
+              <Paragraph>Select a source image to preview.</Paragraph>
+            )}
           </Stack>
         </Card>
 
         <Card>
           <Stack gap="small">
-            <Heading>Processing flow</Heading>
-            <Paragraph>1. The page probes the API through the app server.</Paragraph>
-            <Paragraph>2. You select one or more local images.</Paragraph>
-            <Paragraph>
-              3. The app posts files to <code>/app/crop</code>.
-            </Paragraph>
-            <Paragraph>
-              4. The route forwards the files to the Smart Crop API and returns the result.
-            </Paragraph>
+            <Heading>After</Heading>
+            {firstAfterImage ? (
+              <>
+                <img src={firstAfterImage} alt="After crop" style={{ width: "100%", borderRadius: 10 }} />
+                <a href={firstAfterImage} download="cropped-image.jpg" style={{ fontSize: "14px" }}>
+                  Download cropped image
+                </a>
+              </>
+            ) : (
+              <Paragraph>Crop an image to view output.</Paragraph>
+            )}
           </Stack>
         </Card>
       </Grid>
-
-      {firstImage ? (
-        <Card>
-          <Stack gap="base">
-            <Heading>Preview</Heading>
-            <img
-              src={firstImage}
-              alt="First cropped output"
-              style={{ maxWidth: "100%", borderRadius: "12px" }}
-            />
-            <a href={firstImage} download="cropped-image.jpg" style={{ fontSize: "14px" }}>
-              Download first cropped image
-            </a>
-          </Stack>
-        </Card>
-      ) : null}
     </Page>
   );
 }
