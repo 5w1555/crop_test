@@ -114,8 +114,13 @@ export async function cropImagesWithOutputs(files, options = {}, { signal } = {}
   const endpoint = `${API_BASE}${isBatch ? "/crop/batch" : "/crop"}`;
 
   const form = new FormData();
-  files.forEach((file, index) =>
-    form.append("file", file, file.name || `image-${index}.jpg`),
+  await Promise.all(
+    files.map(async (file, index) => {
+      const blob = new Blob([await file.arrayBuffer()], {
+        type: file.type || "application/octet-stream",
+      });
+      form.append("file", blob, file.name || `image-${index}`);
+    }),
   );
 
   // Forward any crop options the caller passes (all optional)

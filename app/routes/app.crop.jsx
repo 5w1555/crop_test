@@ -19,6 +19,7 @@ export const action = async ({ request }) => {
 
   const formData = await request.formData();
   const uploadedFiles = formData.getAll("file");
+  console.log("file type:", uploadedFiles[0]?.constructor?.name, typeof uploadedFiles[0]);
 
   console.log(`=== ACTION (/app/crop): cropping ${uploadedFiles.length} file(s) ===`);
 

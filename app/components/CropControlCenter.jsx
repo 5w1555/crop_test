@@ -235,11 +235,11 @@ function getCropSummary(result) {
 }
 
 export default function CropControlCenter() {
-  const cropFetcher = useFetcher();
   const statusFetcher = useFetcher();
   const location = useLocation();
   const [files, setFiles] = useState([]);
   const [result, setResult] = useState(null);
+  const [isCropping, setIsCropping] = useState(false);
 
   const previewQuery = location.search || "";
   const apiStatusPath = `/app/api-status${previewQuery}`;
@@ -250,10 +250,6 @@ export default function CropControlCenter() {
       statusFetcher.load(apiStatusPath);
     }
   }, [apiStatusPath, statusFetcher]);
-
-  useEffect(() => {
-    if (cropFetcher.data) setResult(cropFetcher.data);
-  }, [cropFetcher.data]);
 
   const selectedFileSummary = useMemo(
     () =>
@@ -267,15 +263,21 @@ export default function CropControlCenter() {
 
   const status = getStatusPresentation(statusFetcher.data);
   const cropSummary = getCropSummary(result);
-  const isCropping = cropFetcher.state !== "idle";
   const isCheckingApi = statusFetcher.state !== "idle";
   const canCrop = files.length > 0 && statusFetcher.data?.ok;
   const firstImage = result?.mediaUpdates?.[0]?.croppedBase64;
 
-  const handleCrop = () => {
-    const form = new FormData();
-    files.forEach((file) => form.append("file", file));
-    cropFetcher.submit(form, { method: "POST", action: cropActionPath });
+  const handleCrop = async () => {
+    setIsCropping(true);
+    try {
+      const form = new FormData();
+      files.forEach((file) => form.append("file", file));
+      const response = await fetch(cropActionPath, { method: "POST", body: form });
+      const json = await response.json();
+      setResult(json);
+    } finally {
+      setIsCropping(false);
+    }
   };
 
   return (
