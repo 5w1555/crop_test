@@ -177,9 +177,10 @@ function formatUnexpectedResponse(response, rawBody) {
 
 export default function CropControlCenter() {
   const location = useLocation();
-  const previewQuery = location.search || "";
-  const cropActionPath = `/app/crop${previewQuery}`;
-  const productsPath = `/app/products${previewQuery}`;
+  const previewMode = new URLSearchParams(location.search).get("preview") === "1";
+  const apiQuery = previewMode ? "?preview=1" : "";
+  const cropActionPath = `/api/crop${apiQuery}`;
+  const productsPath = `/api/products${apiQuery}`;
 
   const [sourceType, setSourceType] = useState("upload");
   const [files, setFiles] = useState([]);
@@ -223,7 +224,10 @@ export default function CropControlCenter() {
     setErrorMessage("");
 
     try {
-      const response = await fetch(`${productsPath}${previewQuery ? "&" : "?"}q=${encodeURIComponent(searchTerm.trim())}`);
+      const separator = productsPath.includes("?") ? "&" : "?";
+      const response = await fetch(`${productsPath}${separator}q=${encodeURIComponent(searchTerm.trim())}`, {
+        headers: { Accept: "application/json" },
+      });
       const { payload, rawBody, isJson } = await parseJsonResponseSafely(response);
 
       if (!isJson) {
@@ -268,6 +272,7 @@ export default function CropControlCenter() {
     try {
       const response = await fetch(cropActionPath, {
         method: "POST",
+        headers: { Accept: "application/json" },
         body: form,
       });
       const { payload, rawBody, isJson } = await parseJsonResponseSafely(response);
