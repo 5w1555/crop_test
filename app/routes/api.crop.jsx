@@ -116,8 +116,8 @@ export const action = async ({ request }) => {
       marginLeft: parseOptionalNumber(formData.get("marginLeft")),
     };
 
-    const outputs = await cropImagesWithOutputs(filesToCrop, cropOptions);
-    return data({ status: "succeeded", mediaUpdates: outputs });
+    const payload = await cropImagesWithOutputs(filesToCrop, cropOptions);
+    return data(payload);
   } catch (err) {
     return data(
       {

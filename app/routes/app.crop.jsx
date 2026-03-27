@@ -121,8 +121,8 @@ export const action = async ({ request }) => {
   };
 
   try {
-    const outputs = await cropImagesWithOutputs(filesToCrop, cropOptions);
-    return data({ status: "succeeded", mediaUpdates: outputs });
+    const payload = await cropImagesWithOutputs(filesToCrop, cropOptions);
+    return data(payload);
   } catch (err) {
     return data(
       {
