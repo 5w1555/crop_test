@@ -34,36 +34,17 @@ const PRODUCT_SEARCH_QUERY = `#graphql
   }
 `;
 
-export const loader = async ({ request }) => {
-  const url = new URL(request.url);
-  const term = (url.searchParams.get("q") || "").trim();
-
-  if (!term) {
-    return data({ products: [] });
-  }
-
+async function ensureAuthenticatedRequest(request) {
   if (isPreviewRequest(request)) {
-    return data({ products: [] });
+    return null;
   }
 
   const { admin } = await authenticate.admin(request);
+  return admin;
+}
 
-  const response = await admin.graphql(PRODUCT_SEARCH_QUERY, {
-    variables: {
-      query: `title:*${term.replace(/"/g, "") }*`,
-      first: 20,
-    },
-  });
-
-  const payload = await response.json();
-
-  if (payload?.errors?.length) {
-    return data({ products: [], errors: payload.errors }, { status: 502 });
-  }
-
-  const edges = payload?.data?.products?.edges || [];
-
-  const products = edges
+function mapProducts(edges) {
+  return (edges || [])
     .map(({ node }) => {
       const urls = [
         node?.featuredMedia?.preview?.image?.url,
@@ -79,6 +60,49 @@ export const loader = async ({ request }) => {
       };
     })
     .filter((product) => product.title && product.imageUrls.length > 0);
+}
 
-  return data({ products });
+export const loader = async ({ request }) => {
+  try {
+    const url = new URL(request.url);
+    const term = (url.searchParams.get("q") || "").trim();
+
+    if (!term) {
+      return data({ products: [] });
+    }
+
+    const admin = await ensureAuthenticatedRequest(request);
+
+    if (!admin) {
+      return data({ products: [] });
+    }
+
+    const response = await admin.graphql(PRODUCT_SEARCH_QUERY, {
+      variables: {
+        query: `title:*${term.replace(/"/g, "")}*`,
+        first: 20,
+      },
+    });
+
+    const payload = await response.json();
+
+    if (payload?.errors?.length) {
+      return data({ products: [], errors: payload.errors }, { status: 502 });
+    }
+
+    const edges = payload?.data?.products?.edges || [];
+    return data({ products: mapProducts(edges) });
+  } catch (error) {
+    return data(
+      {
+        products: [],
+        errors: [
+          {
+            message: error?.message || "Product search failed",
+          },
+        ],
+      },
+      { status: 500 },
+    );
+  }
 };
