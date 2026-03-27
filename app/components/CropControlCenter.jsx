@@ -149,6 +149,32 @@ function Button({ variant = "secondary", onClick, disabled, children }) {
 
 const EMPTY_MARGINS = { top: "", right: "", bottom: "", left: "" };
 
+async function parseJsonResponseSafely(response) {
+  const contentType = response.headers.get("content-type") || "";
+  const rawBody = await response.text();
+
+  if (!rawBody) {
+    return { payload: null, rawBody: "", isJson: contentType.includes("application/json") };
+  }
+
+  if (!contentType.includes("application/json")) {
+    return { payload: null, rawBody, isJson: false };
+  }
+
+  try {
+    return { payload: JSON.parse(rawBody), rawBody, isJson: true };
+  } catch {
+    return { payload: null, rawBody, isJson: false };
+  }
+}
+
+function formatUnexpectedResponse(response, rawBody) {
+  const contentType = response.headers.get("content-type") || "unknown";
+  const snippet = rawBody.replace(/\s+/g, " ").slice(0, 160);
+  const responseDescriptor = `${response.status} ${response.statusText}`.trim();
+  return `Unexpected non-JSON response from server (${responseDescriptor}, ${contentType})${snippet ? `: ${snippet}` : ""}`;
+}
+
 export default function CropControlCenter() {
   const location = useLocation();
   const previewQuery = location.search || "";
@@ -198,7 +224,11 @@ export default function CropControlCenter() {
 
     try {
       const response = await fetch(`${productsPath}${previewQuery ? "&" : "?"}q=${encodeURIComponent(searchTerm.trim())}`);
-      const payload = await response.json();
+      const { payload, rawBody, isJson } = await parseJsonResponseSafely(response);
+
+      if (!isJson) {
+        throw new Error(formatUnexpectedResponse(response, rawBody));
+      }
 
       if (!response.ok) {
         throw new Error(payload?.errors?.[0]?.message || "Product search failed");
@@ -240,7 +270,12 @@ export default function CropControlCenter() {
         method: "POST",
         body: form,
       });
-      const payload = await response.json();
+      const { payload, rawBody, isJson } = await parseJsonResponseSafely(response);
+
+      if (!isJson) {
+        throw new Error(formatUnexpectedResponse(response, rawBody));
+      }
+
       setResult(payload);
 
       if (!response.ok || payload.error) {
