@@ -188,6 +188,16 @@ function buildDownloadFileName(mediaUpdate, index) {
   return `${sourceName}.jpg`;
 }
 
+function getFailureReason(mediaUpdate) {
+  if (!mediaUpdate || mediaUpdate.status !== "failed") return "";
+  const raw =
+    mediaUpdate?.error?.message ||
+    mediaUpdate?.error?.details?.reason ||
+    mediaUpdate?.error?.details?.detail ||
+    "Crop failed for this image.";
+  return String(raw).replace(/\s+/g, " ").trim();
+}
+
 export default function CropControlCenter() {
   const location = useLocation();
   const previewMode = new URLSearchParams(location.search).get("preview") === "1";
@@ -312,6 +322,17 @@ export default function CropControlCenter() {
   };
 
   const handleDownloadAll = () => {
+    const batchDownloadUrl = result?.summary?.batchDownloadUrl;
+    if (batchDownloadUrl) {
+      const link = document.createElement("a");
+      link.href = batchDownloadUrl;
+      link.download = "cropped-images.zip";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      return;
+    }
+
     successfulMediaUpdates.forEach((mediaUpdate, index) => {
       const link = document.createElement("a");
       link.href = mediaUpdate.croppedBase64;
@@ -471,13 +492,16 @@ export default function CropControlCenter() {
                     </a>
                   ) : null}
                   {successfulMediaUpdates.length > 0 ? (
-                    <Button onClick={handleDownloadAll}>Download cropped images</Button>
+                    <Button onClick={handleDownloadAll}>
+                      {result?.summary?.batchDownloadUrl ? "Download all as ZIP" : "Download cropped images"}
+                    </Button>
                   ) : null}
                 </Inline>
                 <Stack gap="small">
                   {mediaUpdates.map((mediaUpdate, index) => {
                     const hasImage = Boolean(mediaUpdate?.croppedBase64);
                     const filename = buildDownloadFileName(mediaUpdate, index);
+                    const failureReason = getFailureReason(mediaUpdate);
                     return (
                       <div
                         key={`${filename}-${index}`}
@@ -500,6 +524,7 @@ export default function CropControlCenter() {
                             </a>
                           ) : null}
                         </Inline>
+                        {failureReason ? <Paragraph>Reason: {failureReason}</Paragraph> : null}
                       </div>
                     );
                   })}
