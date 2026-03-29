@@ -2545,6 +2545,7 @@ async def download_batch_zip(download_token: str):
 
 @app.post("/crop/batch")
 async def crop_batch_endpoint(
+    request: Request,
     files: list[UploadFile] | None = File(default=None),
     file: list[UploadFile] | None = File(default=None),
     pipeline: str = Form("auto"),
@@ -2583,6 +2584,7 @@ async def crop_batch_endpoint(
 
     media_updates = []
     errors = []
+    downloadable_outputs: list[tuple[str, bytes]] = []
 
     for index, uploaded_file in enumerate(uploaded_files, start=1):
         suffix = os.path.splitext(uploaded_file.filename or "")[1] or ".jpg"
@@ -2626,6 +2628,7 @@ async def crop_batch_endpoint(
                     "error": None,
                 }
             )
+            downloadable_outputs.append((output_filename, output_binary))
         except HTTPException as exc:
             error_code = _error_code_for_status(exc.status_code)
             error_list = _coerce_error_list(exc.detail, code=error_code)
@@ -2684,6 +2687,16 @@ async def crop_batch_endpoint(
     elif failed_count and success_count == 0:
         response_status = "failed"
 
+    batch_download_url = None
+    if downloadable_outputs:
+        zip_buffer = io.BytesIO()
+        with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+            for output_filename, output_binary in downloadable_outputs:
+                archive.writestr(output_filename, output_binary)
+        zip_filename = f"cropped-images-{int(time.time())}.zip"
+        download_token = _register_download(zip_buffer.getvalue(), zip_filename)
+        batch_download_url = _build_download_url(str(request.url_for("download_batch_zip", download_token=download_token)))
+
     return build_canonical_crop_response(
         status=response_status,
         media_updates=media_updates,
@@ -2692,6 +2705,7 @@ async def crop_batch_endpoint(
             "successCount": success_count,
             "failedCount": failed_count,
             "failedFiles": [item["sourceFilename"] for item in media_updates if item.get("status") == "failed"],
+            "batchDownloadUrl": batch_download_url,
         },
         errors=errors,
     )
