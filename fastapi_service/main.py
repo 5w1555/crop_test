@@ -873,7 +873,8 @@ def crop_profile_image(pil_img, box=None, metadata={}, margin=20, neck_offset=50
 def head_bust_crop(input_path,
                    margin=40,
                    target_ratio=None,
-                   conf_threshold=0.3):
+                   conf_threshold=0.3,
+                   use_rotation_heuristic=True):
     """
     Reworked to avoid off-set rotations:
     1) First try without rotation
@@ -896,21 +897,20 @@ def head_bust_crop(input_path,
     needs_rotation = False
     rotation_applied = False
     
-    if landmarks is not None and len(landmarks) >= 2:
-        # Calculate eye alignment (assuming first two landmarks are eyes)
+    if use_rotation_heuristic and landmarks and {"left_eye", "right_eye"}.issubset(landmarks):
+        # Calculate eye alignment from eye landmarks.
         try:
-            left_eye = landmarks[0]
-            right_eye = landmarks[1]
-            
-            # Calculate angle
+            left_eye = landmarks["left_eye"]
+            right_eye = landmarks["right_eye"]
+
             dx = right_eye[0] - left_eye[0]
             dy = right_eye[1] - left_eye[1]
             angle = abs(math.degrees(math.atan2(dy, dx)))
-            
+
             # Only rotate if angle is moderate (not extreme)
             if 3 < angle <= 12:
                 needs_rotation = True
-        except:
+        except Exception:
             pass
     
     # Apply rotation only if needed and not extreme
@@ -1970,6 +1970,7 @@ async def crop_endpoint(
     anchor_hint: str | None = Form(default=None),
     crop_coordinates: str | None = Form(default=None),
     filters: str | None = Form(default=None),
+    use_head_rotation_heuristic: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
     suffix = os.path.splitext(file.filename or "")[1] or ".jpg"
@@ -1983,6 +1984,7 @@ async def crop_endpoint(
         anchor_hint=anchor_hint,
         crop_coordinates=crop_coordinates,
         filters=filters,
+        use_head_rotation_heuristic=use_head_rotation_heuristic,
     )
 
     source_name = file.filename or "upload"
@@ -2075,7 +2077,10 @@ def run_crop_pipeline(
             print("No face detected in request. Using center/content fallback crop.")
             cropped = center_content_crop(pil_img, metadata=metadata)
         elif normalized_method == "head_bust":
-            cropped = head_bust_crop(temp_path)
+            cropped = head_bust_crop(
+                temp_path,
+                use_rotation_heuristic=(crop_options.use_head_rotation_heuristic is not False),
+            )
         elif normalized_method == "auto":
             cropped = auto_crop(
                 pil_img,
@@ -2136,7 +2141,34 @@ class CropOptions:
     anchor_hint: str | None = None
     crop_coordinates: dict[str, float] | None = None
     filters: list[str] | None = None
+    use_head_rotation_heuristic: bool | None = None
 
+
+
+
+def _parse_optional_bool(value, field_name: str):
+    if isinstance(value, FormField):
+        value = value.default
+
+    if value is None:
+        return None
+
+    if isinstance(value, bool):
+        return value
+
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return None
+
+    if normalized in {"1", "true"}:
+        return True
+    if normalized in {"0", "false"}:
+        return False
+
+    raise HTTPException(
+        status_code=400,
+        detail=f"{field_name} must be a boolean (true/false)",
+    )
 
 def parse_crop_options(
     target_aspect_ratio: str | None,
@@ -2147,18 +2179,21 @@ def parse_crop_options(
     anchor_hint: str | None,
     crop_coordinates: str | None = None,
     filters: str | None = None,
+    use_head_rotation_heuristic: str | bool | None = None,
 ) -> CropOptions:
     ratio = _parse_aspect_ratio(target_aspect_ratio)
     margins = _parse_margins(margin_top, margin_right, margin_bottom, margin_left)
     normalized_anchor_hint = _normalize_anchor_hint(anchor_hint)
     normalized_crop_coordinates = _parse_crop_coordinates(crop_coordinates)
     normalized_filters = _parse_filters(filters)
+    normalized_head_rotation = _parse_optional_bool(use_head_rotation_heuristic, "use_head_rotation_heuristic")
     return CropOptions(
         target_aspect_ratio=ratio,
         margins=margins,
         anchor_hint=normalized_anchor_hint,
         crop_coordinates=normalized_crop_coordinates,
         filters=normalized_filters,
+        use_head_rotation_heuristic=normalized_head_rotation,
     )
 
 
@@ -2545,7 +2580,7 @@ async def download_batch_zip(download_token: str):
 
 @app.post("/crop/batch")
 async def crop_batch_endpoint(
-    request: Request,
+    request: Request = None,
     files: list[UploadFile] | None = File(default=None),
     file: list[UploadFile] | None = File(default=None),
     pipeline: str = Form("auto"),
@@ -2558,6 +2593,7 @@ async def crop_batch_endpoint(
     anchor_hint: str | None = Form(default=None),
     crop_coordinates: str | None = Form(default=None),
     filters: str | None = Form(default=None),
+    use_head_rotation_heuristic: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
     uploaded_files = files or file or []
@@ -2580,6 +2616,7 @@ async def crop_batch_endpoint(
         anchor_hint=anchor_hint,
         crop_coordinates=crop_coordinates,
         filters=filters,
+        use_head_rotation_heuristic=use_head_rotation_heuristic,
     )
 
     media_updates = []
@@ -2695,7 +2732,10 @@ async def crop_batch_endpoint(
                 archive.writestr(output_filename, output_binary)
         zip_filename = f"cropped-images-{int(time.time())}.zip"
         download_token = _register_download(zip_buffer.getvalue(), zip_filename)
-        batch_download_url = _build_download_url(str(request.url_for("download_batch_zip", download_token=download_token)))
+        if request is not None:
+            batch_download_url = _build_download_url(str(request.url_for("download_batch_zip", download_token=download_token)))
+        else:
+            batch_download_url = _build_download_url(f"/downloads/{download_token}")
 
     return build_canonical_crop_response(
         status=response_status,

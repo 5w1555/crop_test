@@ -148,6 +148,8 @@ function Button({ variant = "secondary", onClick, disabled, children }) {
 }
 
 const EMPTY_MARGINS = { top: "", right: "", bottom: "", left: "" };
+const FACE_PIPELINE_METHODS = ["auto", "head_bust", "frontal", "profile", "chin", "nose", "below_lips", "center_content"];
+const SALIENCE_PIPELINE_METHODS = ["auto", "center_content"];
 
 async function parseJsonResponseSafely(response) {
   const contentType = response.headers.get("content-type") || "";
@@ -211,8 +213,12 @@ export default function CropControlCenter() {
   const [isSearching, setIsSearching] = useState(false);
   const [products, setProducts] = useState([]);
   const [selectedImageUrl, setSelectedImageUrl] = useState("");
+  const [pipeline, setPipeline] = useState("auto");
   const [method, setMethod] = useState("auto");
   const [targetAspectRatio, setTargetAspectRatio] = useState("");
+  const [anchorHint, setAnchorHint] = useState("auto");
+  const [headRotationHeuristicEnabled, setHeadRotationHeuristicEnabled] = useState(true);
+  const [selectedFilters, setSelectedFilters] = useState([]);
   const [margins, setMargins] = useState(EMPTY_MARGINS);
   const [isCropping, setIsCropping] = useState(false);
   const [result, setResult] = useState(null);
@@ -241,6 +247,15 @@ export default function CropControlCenter() {
     [mediaUpdates],
   );
   const firstAfterImage = successfulMediaUpdates[0]?.croppedBase64 || null;
+
+  const availableMethods = pipeline === "salience" || pipeline === "heuristic" ? SALIENCE_PIPELINE_METHODS : FACE_PIPELINE_METHODS;
+
+  const toggleFilter = (filterName) => {
+    setSelectedFilters((prev) =>
+      prev.includes(filterName) ? prev.filter((name) => name !== filterName) : [...prev, filterName],
+    );
+  };
+
 
   const handleSearch = async () => {
     if (!searchTerm.trim()) {
@@ -290,7 +305,11 @@ export default function CropControlCenter() {
       form.append("imageUrl", selectedImageUrl);
     }
 
+    form.append("pipeline", pipeline);
     form.append("method", method);
+    form.append("anchorHint", anchorHint);
+    form.append("headRotationHeuristicEnabled", String(headRotationHeuristicEnabled));
+    if (selectedFilters.length) form.append("filters", selectedFilters.join(","));
     if (targetAspectRatio !== "") form.append("targetAspectRatio", targetAspectRatio);
     if (margins.top !== "") form.append("marginTop", margins.top);
     if (margins.right !== "") form.append("marginRight", margins.right);
@@ -417,23 +436,84 @@ export default function CropControlCenter() {
           <Heading>Crop settings</Heading>
           <Inline>
             <label style={{ fontSize: "14px" }}>
-              Method{" "}
-              <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ marginLeft: 8 }}>
+              Pipeline{" "}
+              <select
+                value={pipeline}
+                onChange={(e) => {
+                  const nextPipeline = e.target.value;
+                  setPipeline(nextPipeline);
+                  const nextMethods =
+                    nextPipeline === "salience" || nextPipeline === "heuristic"
+                      ? SALIENCE_PIPELINE_METHODS
+                      : FACE_PIPELINE_METHODS;
+                  if (!nextMethods.includes(method)) {
+                    setMethod(nextMethods[0]);
+                  }
+                }}
+                style={{ marginLeft: 8 }}
+              >
                 <option value="auto">auto</option>
-                <option value="manual">manual</option>
+                <option value="face">face</option>
+                <option value="salience">salience</option>
+                <option value="heuristic">heuristic</option>
               </select>
             </label>
             <label style={{ fontSize: "14px" }}>
+              Method{" "}
+              <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ marginLeft: 8 }}>
+                {availableMethods.map((methodName) => (
+                  <option key={methodName} value={methodName}>{methodName}</option>
+                ))}
+              </select>
+            </label>
+            <label style={{ fontSize: "14px" }}>
+              Anchor hint{" "}
+              <select value={anchorHint} onChange={(e) => setAnchorHint(e.target.value)} style={{ marginLeft: 8 }}>
+                <option value="auto">auto</option>
+                <option value="top">top</option>
+                <option value="center">center</option>
+                <option value="bottom">bottom</option>
+                <option value="left">left</option>
+                <option value="right">right</option>
+              </select>
+            </label>
+            <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <input
+                type="checkbox"
+                checked={headRotationHeuristicEnabled}
+                onChange={(e) => setHeadRotationHeuristicEnabled(e.target.checked)}
+              />
+              Use head rotation heuristic
+            </label>
+          </Inline>
+          <Inline>
+            <label style={{ fontSize: "14px" }}>
               Target aspect ratio{" "}
               <input
-                type="number"
-                step="0.01"
+                type="text"
                 value={targetAspectRatio}
                 onChange={(e) => setTargetAspectRatio(e.target.value)}
-                placeholder="e.g. 1.00"
-                style={{ marginLeft: 8, width: 100 }}
+                placeholder="e.g. 1.0 or 4:5"
+                style={{ marginLeft: 8, width: 120 }}
               />
             </label>
+          </Inline>
+          <Inline>
+            <Paragraph>Filters:</Paragraph>
+            {[
+              { value: "sharpen", label: "sharpen" },
+              { value: "detail", label: "detail" },
+              { value: "grayscale", label: "grayscale" },
+            ].map((filter) => (
+              <label key={filter.value} style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={selectedFilters.includes(filter.value)}
+                  onChange={() => toggleFilter(filter.value)}
+                />
+                {filter.label}
+              </label>
+            ))}
           </Inline>
           <Grid columns={4}>
             {Object.keys(margins).map((side) => (
