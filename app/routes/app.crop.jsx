@@ -10,6 +10,17 @@ function parseOptionalNumber(value) {
   return Number.isFinite(parsed) ? parsed : undefined;
 }
 
+function parseOptionalBoolean(value) {
+  if (value == null || value === "") return undefined;
+  if (typeof value === "boolean") return value;
+
+  const normalized = String(value).trim().toLowerCase();
+  if (normalized === "true" || normalized === "1") return true;
+  if (normalized === "false" || normalized === "0") return false;
+  return undefined;
+}
+
+
 function getFilenameFromUrl(imageUrl, contentType) {
   try {
     const pathname = new URL(imageUrl).pathname;
@@ -112,12 +123,15 @@ export const action = async ({ request }) => {
 
   const cropOptions = {
     method: (formData.get("method") || "auto").toString(),
-    pipeline: "auto",
+    pipeline: (formData.get("pipeline") || "auto").toString(),
     targetAspectRatio: parseOptionalNumber(formData.get("targetAspectRatio")),
     marginTop: parseOptionalNumber(formData.get("marginTop")),
     marginRight: parseOptionalNumber(formData.get("marginRight")),
     marginBottom: parseOptionalNumber(formData.get("marginBottom")),
     marginLeft: parseOptionalNumber(formData.get("marginLeft")),
+    anchorHint: (formData.get("anchorHint") || "").toString().trim() || undefined,
+    filters: (formData.get("filters") || "").toString().trim() || undefined,
+    useHeadRotationHeuristic: parseOptionalBoolean(formData.get("headRotationHeuristicEnabled")),
   };
 
   try {

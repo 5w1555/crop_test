@@ -1,5 +1,27 @@
 # ROADMAP
 
+
+## Partial delivery update (March 29, 2026)
+
+### Implemented in this increment
+- Expanded the **Crop settings** UI into an **Advanced controls** surface for:
+  - pipeline selection (`auto`, `face`, `salience`, `heuristic`),
+  - method selection aligned to the chosen pipeline,
+  - anchor hint control,
+  - optional filters (`sharpen`, `detail`, `grayscale`),
+  - explicit toggle for the head-rotation heuristic.
+- Wired the new controls end-to-end from Remix route action to FastAPI form payload.
+- Added FastAPI support for `use_head_rotation_heuristic` so `head_bust` cropping can opt out of rotation heuristics.
+
+### To be implemented
+- Full manual crop coordinate editor in the UI (drag box + numeric `crop_coordinates`).
+- Fine-grained face-detection controls currently internal to FastAPI (`conf_threshold`, lighting/sharpen pre-detect knobs, resize limits).
+- A visual preview overlay for anchor/aspect/margins before running crop.
+- Save/load user presets for crop configurations.
+- Per-method contextual help and automatic compatibility guards.
+
+---
+
 ## Current Status (March 2026)
 
 The app is currently functioning in **preview mode** and is usable for core upload/crop flows.
