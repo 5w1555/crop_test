@@ -95,6 +95,38 @@ function Paragraph({ children }) {
   return <p style={{ fontSize: "14px", lineHeight: 1.6, margin: 0, color: tokens.colors.text }}>{children}</p>;
 }
 
+function Label({ children }) {
+  return <label style={{ fontSize: "13px", fontWeight: 600, color: tokens.colors.text }}>{children}</label>;
+}
+
+function Hint({ children }) {
+  return <p style={{ fontSize: "12px", lineHeight: 1.5, margin: 0, color: tokens.colors.muted }}>{children}</p>;
+}
+
+function SelectField({ label, value, onChange, children, helpText, disabled = false }) {
+  return (
+    <Stack gap="small">
+      <Label>{label}</Label>
+      <select
+        value={value}
+        onChange={onChange}
+        disabled={disabled}
+        style={{
+          border: `1px solid ${tokens.colors.border}`,
+          borderRadius: 8,
+          padding: "8px 10px",
+          fontSize: "14px",
+          background: disabled ? "#f1f1f1" : "#fff",
+          color: tokens.colors.text,
+        }}
+      >
+        {children}
+      </select>
+      {helpText ? <Hint>{helpText}</Hint> : null}
+    </Stack>
+  );
+}
+
 function Badge({ tone = "info", children }) {
   return (
     <span
@@ -217,7 +249,7 @@ export default function CropControlCenter() {
   const [method, setMethod] = useState("auto");
   const [targetAspectRatio, setTargetAspectRatio] = useState("");
   const [anchorHint, setAnchorHint] = useState("auto");
-  const [headRotationHeuristicEnabled, setHeadRotationHeuristicEnabled] = useState(true);
+  const [headRotationMode, setHeadRotationMode] = useState("enabled");
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [margins, setMargins] = useState(EMPTY_MARGINS);
   const [isCropping, setIsCropping] = useState(false);
@@ -249,6 +281,8 @@ export default function CropControlCenter() {
   const firstAfterImage = successfulMediaUpdates[0]?.croppedBase64 || null;
 
   const availableMethods = pipeline === "salience" || pipeline === "heuristic" ? SALIENCE_PIPELINE_METHODS : FACE_PIPELINE_METHODS;
+  const headRotationHeuristicEnabled = headRotationMode === "enabled";
+  const isFacePipeline = pipeline === "auto" || pipeline === "face";
 
   const toggleFilter = (filterName) => {
     setSelectedFilters((prev) =>
@@ -434,70 +468,95 @@ export default function CropControlCenter() {
       <Card>
         <Stack gap="small">
           <Heading>Crop settings</Heading>
-          <Inline>
-            <label style={{ fontSize: "14px" }}>
-              Pipeline{" "}
-              <select
-                value={pipeline}
-                onChange={(e) => {
-                  const nextPipeline = e.target.value;
-                  setPipeline(nextPipeline);
-                  const nextMethods =
-                    nextPipeline === "salience" || nextPipeline === "heuristic"
-                      ? SALIENCE_PIPELINE_METHODS
-                      : FACE_PIPELINE_METHODS;
-                  if (!nextMethods.includes(method)) {
-                    setMethod(nextMethods[0]);
-                  }
-                }}
-                style={{ marginLeft: 8 }}
-              >
-                <option value="auto">auto</option>
-                <option value="face">face</option>
-                <option value="salience">salience</option>
-                <option value="heuristic">heuristic</option>
-              </select>
-            </label>
-            <label style={{ fontSize: "14px" }}>
-              Method{" "}
-              <select value={method} onChange={(e) => setMethod(e.target.value)} style={{ marginLeft: 8 }}>
-                {availableMethods.map((methodName) => (
-                  <option key={methodName} value={methodName}>{methodName}</option>
-                ))}
-              </select>
-            </label>
-            <label style={{ fontSize: "14px" }}>
-              Anchor hint{" "}
-              <select value={anchorHint} onChange={(e) => setAnchorHint(e.target.value)} style={{ marginLeft: 8 }}>
-                <option value="auto">auto</option>
-                <option value="top">top</option>
-                <option value="center">center</option>
-                <option value="bottom">bottom</option>
-                <option value="left">left</option>
-                <option value="right">right</option>
-              </select>
-            </label>
-            <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6 }}>
-              <input
-                type="checkbox"
-                checked={headRotationHeuristicEnabled}
-                onChange={(e) => setHeadRotationHeuristicEnabled(e.target.checked)}
-              />
-              Use head rotation heuristic
-            </label>
-          </Inline>
-          <Inline>
-            <label style={{ fontSize: "14px" }}>
-              Target aspect ratio{" "}
+          <Grid columns={2}>
+            <SelectField
+              label="Pipeline"
+              value={pipeline}
+              onChange={(e) => {
+                const nextPipeline = e.target.value;
+                setPipeline(nextPipeline);
+                const nextMethods =
+                  nextPipeline === "salience" || nextPipeline === "heuristic" ? SALIENCE_PIPELINE_METHODS : FACE_PIPELINE_METHODS;
+                if (!nextMethods.includes(method)) {
+                  setMethod(nextMethods[0]);
+                }
+              }}
+              helpText="Choose how the app identifies the best crop region."
+            >
+              <option value="auto">auto</option>
+              <option value="face">face</option>
+              <option value="salience">salience</option>
+              <option value="heuristic">heuristic</option>
+            </SelectField>
+            <SelectField
+              label="Method"
+              value={method}
+              onChange={(e) => setMethod(e.target.value)}
+              helpText="Method options update automatically based on the selected pipeline."
+            >
+              {availableMethods.map((methodName) => (
+                <option key={methodName} value={methodName}>{methodName}</option>
+              ))}
+            </SelectField>
+            <SelectField
+              label="Anchor hint"
+              value={anchorHint}
+              onChange={(e) => setAnchorHint(e.target.value)}
+              helpText="Use this only when you need to bias crop placement."
+            >
+              <option value="auto">auto</option>
+              <option value="top">top</option>
+              <option value="center">center</option>
+              <option value="bottom">bottom</option>
+              <option value="left">left</option>
+              <option value="right">right</option>
+            </SelectField>
+            <Stack gap="small">
+              <Label>Head rotation heuristic</Label>
+              <Inline>
+                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6, opacity: isFacePipeline ? 1 : 0.6 }}>
+                  <input
+                    type="radio"
+                    name="headRotationMode"
+                    value="enabled"
+                    checked={headRotationMode === "enabled"}
+                    disabled={!isFacePipeline}
+                    onChange={(e) => setHeadRotationMode(e.target.value)}
+                  />
+                  Enabled
+                </label>
+                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6, opacity: isFacePipeline ? 1 : 0.6 }}>
+                  <input
+                    type="radio"
+                    name="headRotationMode"
+                    value="disabled"
+                    checked={headRotationMode === "disabled"}
+                    disabled={!isFacePipeline}
+                    onChange={(e) => setHeadRotationMode(e.target.value)}
+                  />
+                  Disabled
+                </label>
+              </Inline>
+              <Hint>
+                {isFacePipeline
+                  ? "Explicitly enable or disable head rotation for face-aware crops."
+                  : "This option applies only to auto and face pipelines."}
+              </Hint>
+            </Stack>
+          </Grid>
+          <div style={{ maxWidth: 320 }}>
+            <Stack gap="small">
+              <Label>Target aspect ratio</Label>
               <input
                 type="text"
                 value={targetAspectRatio}
                 onChange={(e) => setTargetAspectRatio(e.target.value)}
                 placeholder="e.g. 1.0 or 4:5"
-                style={{ marginLeft: 8, width: 120 }}
+                style={{ border: `1px solid ${tokens.colors.border}`, borderRadius: 8, padding: "8px 10px", fontSize: "14px" }}
               />
-            </label>
-          </Inline>
+              <Hint>Leave empty to keep the original aspect ratio.</Hint>
+            </Stack>
+          </div>
           <Inline>
             <Paragraph>Filters:</Paragraph>
             {[
