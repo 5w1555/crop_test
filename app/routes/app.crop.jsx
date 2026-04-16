@@ -132,6 +132,8 @@ export const action = async ({ request }) => {
     anchorHint: (formData.get("anchorHint") || "").toString().trim() || undefined,
     filters: (formData.get("filters") || "").toString().trim() || undefined,
     useHeadRotationHeuristic: parseOptionalBoolean(formData.get("headRotationHeuristicEnabled")),
+    useCenterBiasHeuristic: parseOptionalBoolean(formData.get("centerBiasHeuristicEnabled")),
+    overrideImageSizeLimit: parseOptionalBoolean(formData.get("overrideImageSizeLimit")),
   };
 
   try {
