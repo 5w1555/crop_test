@@ -315,7 +315,7 @@ def _to_bgr_and_rgb_pil(pil_img, enhance_lighting=False):
         rgb_pil = Image.fromarray(cv2.cvtColor(cv_img, cv2.COLOR_BGR2RGB))
     return cv_img, rgb_pil
 
-def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
+def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False, override_size_limits=False):
     """
     Read an image from a file path, with optional resizing, sharpening, and lighting enhancement.
     Supports RAW, HEIC, and standard image formats.
@@ -385,7 +385,7 @@ def read_image(input_path, max_dim=1024, sharpen=True, enhance_lighting=False):
             with Image.open(input_path) as opened:
                 src_w, src_h = opened.size
                 src_mp = (src_w * src_h) / 1_000_000
-                if src_mp > (MAX_DECODED_MP * 4):
+                if (not override_size_limits) and src_mp > (MAX_DECODED_MP * 4):
                     print(
                         f"Image too large to process safely ({src_mp:.1f}MP). "
                         f"Limit is {MAX_DECODED_MP:.1f}MP (hard stop at {MAX_DECODED_MP * 4:.1f}MP)."
@@ -495,6 +495,7 @@ def get_face_and_landmarks(
     conf_threshold=0.3,
     sharpen=True,
     apply_rotation=True,
+    override_size_limits=False,
     model=None,  # ✅ NEW: allow external model injection
 ):
     """
@@ -508,7 +509,11 @@ def get_face_and_landmarks(
     face_model = model if model is not None else get_insightface_model()
 
     # Step 1: Load and validate image
-    cv_img, pil_img, metadata = read_image(input_path, sharpen=sharpen)
+    cv_img, pil_img, metadata = read_image(
+        input_path,
+        sharpen=sharpen,
+        override_size_limits=override_size_limits,
+    )
 
     if cv_img is None:
         print(f"[Error] Could not read image at: {input_path}")
@@ -874,7 +879,8 @@ def head_bust_crop(input_path,
                    margin=40,
                    target_ratio=None,
                    conf_threshold=0.3,
-                   use_rotation_heuristic=True):
+                   use_rotation_heuristic=True,
+                   override_size_limits=False):
     """
     Reworked to avoid off-set rotations:
     1) First try without rotation
@@ -887,7 +893,8 @@ def head_bust_crop(input_path,
     box, landmarks, _, pil_img, _ = get_face_and_landmarks(
         input_path,
         conf_threshold=conf_threshold,
-        apply_rotation=False
+        apply_rotation=False,
+        override_size_limits=override_size_limits,
     )
     
     if box is None:
@@ -919,7 +926,8 @@ def head_bust_crop(input_path,
             box, landmarks, _, rotated_pil, _ = get_face_and_landmarks(
                 input_path,
                 conf_threshold=conf_threshold,
-                apply_rotation=True
+                apply_rotation=True,
+                override_size_limits=override_size_limits,
             )
             
             if box is not None:
@@ -934,7 +942,8 @@ def head_bust_crop(input_path,
         box, landmarks, _, pil_img, _ = get_face_and_landmarks(
             input_path,
             conf_threshold=conf_threshold,
-            apply_rotation=False
+            apply_rotation=False,
+            override_size_limits=override_size_limits,
         )
         
         if box is None:
@@ -1649,6 +1658,15 @@ def _parse_env_int(name: str, default: str, *, min_value: int, max_value: int | 
     return parsed
 
 
+def _parse_env_bool(name: str, default: str = "0") -> bool:
+    raw_value = str(os.getenv(name, default)).strip().lower()
+    if raw_value in {"1", "true", "yes", "on"}:
+        return True
+    if raw_value in {"0", "false", "no", "off"}:
+        return False
+    raise RuntimeError(f"{name} must be a boolean-like value (true/false). Received: {raw_value!r}")
+
+
 def _validate_fastapi_startup_env() -> None:
     errors: list[str] = []
 
@@ -1696,6 +1714,7 @@ MAX_BATCH_FILES = _parse_env_int("SMARTCROP_MAX_BATCH_FILES", "8", min_value=1, 
 CROP_CONCURRENCY = _parse_env_int("SMARTCROP_MAX_CONCURRENCY", "1" if os.getenv("RENDER") else "2", min_value=1, max_value=64)
 SLOT_ACQUIRE_TIMEOUT_SECONDS = _parse_env_float("SMARTCROP_ACQUIRE_TIMEOUT_SECONDS", "20", min_value=0.5, max_value=300)
 PRELOAD_MODEL = os.getenv("SMARTCROP_PRELOAD_MODEL", "1").lower() in {"1", "true", "yes", "on"}
+ALLOW_SIZE_LIMIT_OVERRIDE = _parse_env_bool("SMARTCROP_ALLOW_SIZE_LIMIT_OVERRIDE", "1")
 SMARTCROP_API_TOKEN = os.getenv("SMARTCROP_API_TOKEN")
 DOWNLOAD_TTL_SECONDS = _parse_env_int("SMARTCROP_DOWNLOAD_TTL_SECONDS", "600", min_value=60, max_value=86400)
 DOWNLOAD_TMP_DIR = Path("/tmp/smartcrop-downloads")
@@ -1706,7 +1725,9 @@ _download_registry_lock = threading.Lock()
 _crop_request_semaphore = asyncio.Semaphore(CROP_CONCURRENCY)
 
 
-def _validate_upload_size(total_bytes: int, file_label: str):
+def _validate_upload_size(total_bytes: int, file_label: str, *, override_size_limits: bool = False):
+    if override_size_limits:
+        return
     if total_bytes > MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=413,
@@ -1714,14 +1735,20 @@ def _validate_upload_size(total_bytes: int, file_label: str):
         )
 
 
-async def _stream_upload_to_temp_file(upload_file: UploadFile, tmp_file, file_label: str) -> int:
+async def _stream_upload_to_temp_file(
+    upload_file: UploadFile,
+    tmp_file,
+    file_label: str,
+    *,
+    override_size_limits: bool = False,
+) -> int:
     total_bytes = 0
     while True:
         chunk = await upload_file.read(UPLOAD_READ_CHUNK_BYTES)
         if not chunk:
             break
         total_bytes += len(chunk)
-        _validate_upload_size(total_bytes, file_label)
+        _validate_upload_size(total_bytes, file_label, override_size_limits=override_size_limits)
         tmp_file.write(chunk)
     tmp_file.flush()
     return total_bytes
@@ -1971,6 +1998,8 @@ async def crop_endpoint(
     crop_coordinates: str | None = Form(default=None),
     filters: str | None = Form(default=None),
     use_head_rotation_heuristic: str | None = Form(default=None),
+    use_center_bias_heuristic: str | None = Form(default=None),
+    override_image_size_limit: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
     suffix = os.path.splitext(file.filename or "")[1] or ".jpg"
@@ -1985,12 +2014,19 @@ async def crop_endpoint(
         crop_coordinates=crop_coordinates,
         filters=filters,
         use_head_rotation_heuristic=use_head_rotation_heuristic,
+        use_center_bias_heuristic=use_center_bias_heuristic,
+        override_image_size_limit=override_image_size_limit,
     )
 
     source_name = file.filename or "upload"
 
     try:
-        total_bytes = await _stream_upload_to_temp_file(file, tmp, source_name)
+        total_bytes = await _stream_upload_to_temp_file(
+            file,
+            tmp,
+            source_name,
+            override_size_limits=(crop_options.override_image_size_limit is True),
+        )
         tmp.close()
 
         if total_bytes == 0:
@@ -2060,7 +2096,9 @@ def run_crop_pipeline(
 ):
     pipeline = _normalize_pipeline(pipeline)
     box, landmarks, cv_img, pil_img, metadata = get_face_and_landmarks(
-        temp_path, conf_threshold=0.3
+        temp_path,
+        conf_threshold=0.3,
+        override_size_limits=(crop_options.override_image_size_limit is True),
     )
 
     if crop_options.crop_coordinates:
@@ -2080,6 +2118,7 @@ def run_crop_pipeline(
             cropped = head_bust_crop(
                 temp_path,
                 use_rotation_heuristic=(crop_options.use_head_rotation_heuristic is not False),
+                override_size_limits=(crop_options.override_image_size_limit is True),
             )
         elif normalized_method == "auto":
             cropped = auto_crop(
@@ -2119,7 +2158,7 @@ def run_crop_pipeline(
         candidate_box = compute_candidate_crop_box(
             salience_mask,
             pil_img.size,
-            use_center_bias_fallback=True,
+            use_center_bias_fallback=(crop_options.use_center_bias_heuristic is not False),
         )
         if candidate_box is None:
             cropped = center_content_crop(pil_img, metadata=metadata)
@@ -2142,6 +2181,8 @@ class CropOptions:
     crop_coordinates: dict[str, float] | None = None
     filters: list[str] | None = None
     use_head_rotation_heuristic: bool | None = None
+    use_center_bias_heuristic: bool | None = None
+    override_image_size_limit: bool | None = None
 
 
 
@@ -2180,6 +2221,8 @@ def parse_crop_options(
     crop_coordinates: str | None = None,
     filters: str | None = None,
     use_head_rotation_heuristic: str | bool | None = None,
+    use_center_bias_heuristic: str | bool | None = None,
+    override_image_size_limit: str | bool | None = None,
 ) -> CropOptions:
     ratio = _parse_aspect_ratio(target_aspect_ratio)
     margins = _parse_margins(margin_top, margin_right, margin_bottom, margin_left)
@@ -2187,6 +2230,13 @@ def parse_crop_options(
     normalized_crop_coordinates = _parse_crop_coordinates(crop_coordinates)
     normalized_filters = _parse_filters(filters)
     normalized_head_rotation = _parse_optional_bool(use_head_rotation_heuristic, "use_head_rotation_heuristic")
+    normalized_center_bias = _parse_optional_bool(use_center_bias_heuristic, "use_center_bias_heuristic")
+    normalized_size_override = _parse_optional_bool(override_image_size_limit, "override_image_size_limit")
+    if normalized_size_override and not ALLOW_SIZE_LIMIT_OVERRIDE:
+        raise HTTPException(
+            status_code=400,
+            detail="override_image_size_limit is disabled by server configuration",
+        )
     return CropOptions(
         target_aspect_ratio=ratio,
         margins=margins,
@@ -2194,6 +2244,8 @@ def parse_crop_options(
         crop_coordinates=normalized_crop_coordinates,
         filters=normalized_filters,
         use_head_rotation_heuristic=normalized_head_rotation,
+        use_center_bias_heuristic=normalized_center_bias,
+        override_image_size_limit=normalized_size_override,
     )
 
 
@@ -2594,6 +2646,8 @@ async def crop_batch_endpoint(
     crop_coordinates: str | None = Form(default=None),
     filters: str | None = Form(default=None),
     use_head_rotation_heuristic: str | None = Form(default=None),
+    use_center_bias_heuristic: str | None = Form(default=None),
+    override_image_size_limit: str | None = Form(default=None),
     _: None = Depends(require_smartcrop_token),
 ):
     uploaded_files = files or file or []
@@ -2617,6 +2671,8 @@ async def crop_batch_endpoint(
         crop_coordinates=crop_coordinates,
         filters=filters,
         use_head_rotation_heuristic=use_head_rotation_heuristic,
+        use_center_bias_heuristic=use_center_bias_heuristic,
+        override_image_size_limit=override_image_size_limit,
     )
 
     media_updates = []
@@ -2629,7 +2685,12 @@ async def crop_batch_endpoint(
         source_name = uploaded_file.filename or f"image_{index}{suffix}"
 
         try:
-            total_bytes = await _stream_upload_to_temp_file(uploaded_file, tmp, source_name)
+            total_bytes = await _stream_upload_to_temp_file(
+                uploaded_file,
+                tmp,
+                source_name,
+                override_size_limits=(crop_options.override_image_size_limit is True),
+            )
             tmp.close()
 
             if total_bytes == 0:

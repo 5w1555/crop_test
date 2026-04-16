@@ -219,3 +219,33 @@ Update this file whenever any of the following changes:
 - deployment/runtime assumptions.
 
 If conflicts exist between historical docs and this file, **this file should be treated as the current operational baseline** until superseded.
+
+---
+
+## 12) Heuristics implementation findings (April 16, 2026)
+
+After reviewing the current crop flow, the following behavior was confirmed:
+
+1. **Head-rotation toggle exists, but only affects one method branch.**
+   - `use_head_rotation_heuristic` is only consumed by `head_bust_crop(...)`.
+   - For other face methods (`auto`, `frontal`, `profile`, etc.), head-rotation toggles in the UI do not change behavior.
+
+2. **Salience center-bias fallback existed in code but was always enabled.**
+   - `compute_candidate_crop_box(..., use_center_bias_fallback=True)` was hardcoded, so there was no user-level way to disable that heuristic.
+
+3. **Heuristics were not independently configurable end-to-end.**
+   - UI exposed head rotation only.
+   - Backend had at least one additional heuristic (`use_center_bias_fallback`) but no API contract field for it.
+
+4. **Image-size guardrails were hard stops without request-level override.**
+   - Upload-size checks and decoded-image hard-stop logic could block large files even for intentional high-resolution use cases.
+
+### Current remediation now implemented
+
+- Added independent API/UI heuristic controls:
+  - `use_head_rotation_heuristic` (face pipeline / head-bust path),
+  - `use_center_bias_heuristic` (salience/heuristic pipeline fallback behavior).
+- Added request-level size override:
+  - `override_image_size_limit=true` (with server-side opt-out via `SMARTCROP_ALLOW_SIZE_LIMIT_OVERRIDE=0`).
+
+This closes the mismatch where heuristics existed internally but were not independently user-controllable.

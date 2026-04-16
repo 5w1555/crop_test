@@ -250,6 +250,8 @@ export default function CropControlCenter() {
   const [targetAspectRatio, setTargetAspectRatio] = useState("");
   const [anchorHint, setAnchorHint] = useState("auto");
   const [headRotationMode, setHeadRotationMode] = useState("enabled");
+  const [centerBiasMode, setCenterBiasMode] = useState("enabled");
+  const [overrideImageSizeLimit, setOverrideImageSizeLimit] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [margins, setMargins] = useState(EMPTY_MARGINS);
   const [isCropping, setIsCropping] = useState(false);
@@ -282,7 +284,9 @@ export default function CropControlCenter() {
 
   const availableMethods = pipeline === "salience" || pipeline === "heuristic" ? SALIENCE_PIPELINE_METHODS : FACE_PIPELINE_METHODS;
   const headRotationHeuristicEnabled = headRotationMode === "enabled";
+  const centerBiasHeuristicEnabled = centerBiasMode === "enabled";
   const isFacePipeline = pipeline === "auto" || pipeline === "face";
+  const isSaliencePipeline = pipeline === "salience" || pipeline === "heuristic";
 
   const toggleFilter = (filterName) => {
     setSelectedFilters((prev) =>
@@ -342,7 +346,9 @@ export default function CropControlCenter() {
     form.append("pipeline", pipeline);
     form.append("method", method);
     form.append("anchorHint", anchorHint);
-    form.append("headRotationHeuristicEnabled", String(headRotationHeuristicEnabled));
+    if (isFacePipeline) form.append("headRotationHeuristicEnabled", String(headRotationHeuristicEnabled));
+    if (isSaliencePipeline) form.append("centerBiasHeuristicEnabled", String(centerBiasHeuristicEnabled));
+    form.append("overrideImageSizeLimit", String(overrideImageSizeLimit));
     if (selectedFilters.length) form.append("filters", selectedFilters.join(","));
     if (targetAspectRatio !== "") form.append("targetAspectRatio", targetAspectRatio);
     if (margins.top !== "") form.append("marginTop", margins.top);
@@ -542,6 +548,50 @@ export default function CropControlCenter() {
                   ? "Explicitly enable or disable head rotation for face-aware crops."
                   : "This option applies only to auto and face pipelines."}
               </Hint>
+            </Stack>
+            <Stack gap="small">
+              <Label>Center-bias heuristic</Label>
+              <Inline>
+                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6, opacity: isSaliencePipeline ? 1 : 0.6 }}>
+                  <input
+                    type="radio"
+                    name="centerBiasMode"
+                    value="enabled"
+                    checked={centerBiasMode === "enabled"}
+                    disabled={!isSaliencePipeline}
+                    onChange={(e) => setCenterBiasMode(e.target.value)}
+                  />
+                  Enabled
+                </label>
+                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6, opacity: isSaliencePipeline ? 1 : 0.6 }}>
+                  <input
+                    type="radio"
+                    name="centerBiasMode"
+                    value="disabled"
+                    checked={centerBiasMode === "disabled"}
+                    disabled={!isSaliencePipeline}
+                    onChange={(e) => setCenterBiasMode(e.target.value)}
+                  />
+                  Disabled
+                </label>
+              </Inline>
+              <Hint>
+                {isSaliencePipeline
+                  ? "Controls center fallback when salience cannot identify a valid crop area."
+                  : "This option applies only to salience and heuristic pipelines."}
+              </Hint>
+            </Stack>
+            <Stack gap="small">
+              <Label>Override image-size limits</Label>
+              <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={overrideImageSizeLimit}
+                  onChange={(e) => setOverrideImageSizeLimit(e.target.checked)}
+                />
+                Allow larger uploads (may be slower)
+              </label>
+              <Hint>Bypasses upload/decode hard stops so very large images can be processed.</Hint>
             </Stack>
           </Grid>
           <div style={{ maxWidth: 320 }}>

@@ -136,6 +136,8 @@ export async function cropImagesWithOutputs(files, options = {}, { signal } = {}
     cropCoordinates,
     filters,
     useHeadRotationHeuristic,
+    useCenterBiasHeuristic,
+    overrideImageSizeLimit,
   } = options;
 
   form.append("method", method);
@@ -149,6 +151,8 @@ export async function cropImagesWithOutputs(files, options = {}, { signal } = {}
   if (cropCoordinates != null)   form.append("crop_coordinates",     JSON.stringify(cropCoordinates));
   if (filters        != null)    form.append("filters",              Array.isArray(filters) ? JSON.stringify(filters) : filters);
   if (useHeadRotationHeuristic != null) form.append("use_head_rotation_heuristic", String(useHeadRotationHeuristic));
+  if (useCenterBiasHeuristic != null) form.append("use_center_bias_heuristic", String(useCenterBiasHeuristic));
+  if (overrideImageSizeLimit != null) form.append("override_image_size_limit", String(overrideImageSizeLimit));
 
   // Batch jobs can be slow on Render's free tier — give them more time
   const timeout = withTimeout(signal, isBatch ? 60_000 : REQUEST_TIMEOUT_MS);

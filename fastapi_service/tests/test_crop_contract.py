@@ -22,6 +22,8 @@ def test_parse_crop_options_normalizes_supported_inputs(fastapi_main_module):
         anchor_hint=" TOP ",
         crop_coordinates='{"left":0.1,"top":0.2,"width":0.6,"height":0.7}',
         filters='["sharpen", "grayscale"]',
+        use_center_bias_heuristic="false",
+        override_image_size_limit="true",
     )
 
     assert options.target_aspect_ratio == (4.0, 5.0)
@@ -34,6 +36,8 @@ def test_parse_crop_options_normalizes_supported_inputs(fastapi_main_module):
         "height": 0.7,
     }
     assert options.filters == ["sharpen", "grayscale"]
+    assert options.use_center_bias_heuristic is False
+    assert options.override_image_size_limit is True
 
 
 @pytest.mark.parametrize(
@@ -258,11 +262,11 @@ def test_run_crop_pipeline_uses_salience_candidate_box(monkeypatch, fastapi_main
         "infer_salience_mask",
         lambda *args, **kwargs: [[0.0]],
     )
-    monkeypatch.setattr(
-        fastapi_main_module,
-        "compute_candidate_crop_box",
-        lambda *args, **kwargs: (10, 10, 90, 80),
-    )
+    captured = {}
+    def _capture_candidate(*args, **kwargs):
+        captured["use_center_bias_fallback"] = kwargs.get("use_center_bias_fallback")
+        return (10, 10, 90, 80)
+    monkeypatch.setattr(fastapi_main_module, "compute_candidate_crop_box", _capture_candidate)
     monkeypatch.setattr(
         fastapi_main_module,
         "apply_crop_postprocessing",
@@ -277,6 +281,41 @@ def test_run_crop_pipeline_uses_salience_candidate_box(monkeypatch, fastapi_main
     )
 
     assert result.size == (80, 70)
+    assert captured["use_center_bias_fallback"] is True
+
+
+def test_run_crop_pipeline_allows_disabling_center_bias_heuristic(monkeypatch, fastapi_main_module):
+    image = Image.new("RGB", (120, 100), "white")
+    captured = {}
+
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "get_face_and_landmarks",
+        lambda *args, **kwargs: ([1, 2, 3, 4], [[1, 1]], "cv", image, {}),
+    )
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "infer_salience_mask",
+        lambda *args, **kwargs: [[0.0]],
+    )
+    def _capture_candidate(*args, **kwargs):
+        captured["use_center_bias_fallback"] = kwargs.get("use_center_bias_fallback")
+        return (10, 10, 90, 80)
+    monkeypatch.setattr(fastapi_main_module, "compute_candidate_crop_box", _capture_candidate)
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "apply_crop_postprocessing",
+        lambda cropped, crop_options: cropped,
+    )
+
+    fastapi_main_module.run_crop_pipeline(
+        "tmp.jpg",
+        "auto",
+        fastapi_main_module.CropOptions(use_center_bias_heuristic=False),
+        pipeline="salience",
+    )
+
+    assert captured["use_center_bias_fallback"] is False
 
 
 def test_run_crop_pipeline_salience_falls_back_when_inference_fails(monkeypatch, fastapi_main_module):

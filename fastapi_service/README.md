@@ -41,6 +41,8 @@ Notes:
 - Images larger than `SMARTCROP_MAX_MP` are aggressively downscaled before OpenCV/Numpy conversion.
 - Extremely large inputs (more than 4× `SMARTCROP_MAX_MP`) are rejected early to avoid excessive memory use.
 - For small containers (1-2 GB RAM), keep `SMARTCROP_MAX_MP` around `12-20`; raise only if you truly need higher-resolution face crops.
+- Request-level override is available with form field `override_image_size_limit=true` (for `/crop` and `/crop/batch`).
+- Guardrail: set `SMARTCROP_ALLOW_SIZE_LIMIT_OVERRIDE=0` to disable request-level overrides globally.
 
 3. Start the server:
 
