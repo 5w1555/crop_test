@@ -1,251 +1,138 @@
-# SmartCrop — Current Codebase State (April 15, 2026)
+# Context — `fastapi_service/main.py` Contract vs Front-End (1:1 Audit)
 
-This document is the **single source of truth** for the app’s current implementation status and the baseline for future development toward a **usable Shopify embedded app**.
-
----
-
-## 1) Product Purpose (as implemented today)
-
-SmartCrop is a Shopify embedded app that lets merchants:
-- select images (file upload and Shopify product image lookup),
-- run server-side cropping via a separate FastAPI service,
-- receive cropped outputs (base64/media update payloads),
-- and (in intended production flow) write cropped media back to Shopify.
-
-The app combines:
-- **Node/React Router Shopify app** (UI, auth, billing shell, Shopify Admin API access), and
-- **Python FastAPI image processing service** (crop pipelines, face/salience heuristics, single + batch endpoints).
+## Scope
+This file condenses the operational contract implemented in `fastapi_service/main.py` and compares it against the current front-end request paths.
 
 ---
 
-## 2) Architecture Snapshot
+## 1) `main.py` condensed contract (what the backend actually does)
 
-### 2.1 Node app (Shopify embedded app)
-- Framework: React Router + Shopify App React Router server package.
-- Session storage: Prisma session storage on PostgreSQL.
-- Main crop UI route: `/app/crop`.
-- Internal API routes:
-  - `/api/crop` (crop action endpoint)
-  - `/api/products` (Shopify product media search)
-  - `/app/api-status` (FastAPI health check proxy)
+### 1.1 Public endpoints
+- `GET /` → service metadata.
+- `GET /health` → `{ "status": "ok" }`.
+- `POST /crop` → single-file crop.
+- `POST /crop/batch` → multi-file crop.
+- `GET /downloads/{download_token}` → ZIP download for batch outputs.
 
-### 2.2 FastAPI service
-- Exposes:
-  - `GET /health`
-  - `POST /crop`
-  - `POST /crop/batch`
-  - `GET /downloads/{download_token}`
-- Processing stack includes face detection (InsightFace), salience functions, ICC/profile handling, optional HEIC/RAW handling, and image filtering options.
+All crop endpoints require `X-SmartCrop-Token` when configured and return canonical payloads:
+- `status`: `succeeded | partial_failure | failed`
+- `mediaUpdates`: per-file results
+- `summary`: counts + optional `batchDownloadUrl`
+- `errors`: normalized error objects
 
-### 2.3 Deployment shape (Render)
-- `render.yaml` defines two web services:
-  - `smart-crop-app` (Node)
-  - `smart-crop-api` (Python)
-- Shared secret model: `SMARTCROP_API_TOKEN` must match on both services.
+### 1.2 Accepted crop request fields
+`/crop` and `/crop/batch` both accept the same crop option fields:
+- `pipeline`: `auto | face | salience | heuristic`
+- `method`:
+  - face/auto pipeline: `auto | head_bust | frontal | profile | chin | nose | below_lips | center_content`
+  - salience/heuristic pipeline: `auto | center_content`
+- `target_aspect_ratio`: decimal (`1.0`) or ratio string (`4:5`)
+- margins: `margin_top`, `margin_right`, `margin_bottom`, `margin_left` (non-negative)
+- `anchor_hint`: `auto | top | center | bottom | left | right`
+- `crop_coordinates`: normalized fractional JSON `{left, top, width, height}` (+ optional source dimensions)
+- `filters`: CSV or JSON array, allowed: `sharpen | detail | grayscale`
+- `use_head_rotation_heuristic`: optional boolean
+- `use_center_bias_heuristic`: optional boolean
+- `override_image_size_limit`: optional boolean (can be disabled server-side)
 
----
+### 1.3 Pipeline behavior
+- `auto/face` pipeline:
+  - runs InsightFace face detection + landmarks
+  - no face → center/content fallback
+  - method-specific branching (`head_bust`, `frontal`, `profile`, etc.)
+- `salience/heuristic` pipeline:
+  - salience mask inference
+  - candidate crop box computation
+  - optional center-bias fallback controlled by `use_center_bias_heuristic`
 
-## 3) What is implemented and working in the code
+### 1.4 Post-processing order (important)
+1. Manual crop (`crop_coordinates`) **or**
+2. Aspect ratio enforcement + anchor hint
+3. Margins
+4. Filters
 
-### 3.1 Shopify app foundation
-- Shopify app server is configured with App Store distribution, embedded mode, current API version, OAuth/auth helpers, and Prisma-backed sessions.
-- Webhook routes exist (app uninstall/scopes update + compliance routes).
-
-### 3.2 Crop UX and request wiring
-- `CropControlCenter` provides an advanced control surface:
-  - pipeline selection (`auto`, `face`, `salience`, `heuristic` behavior in UI),
-  - method selection by pipeline,
-  - aspect ratio, margins,
-  - anchor hint,
-  - filters,
-  - head rotation heuristic toggle.
-- Supports source modes:
-  - local uploads,
-  - Shopify product image search and image URL selection.
-- `/app/crop` action forwards these crop options to SmartCrop API client.
-
-### 3.3 Crop API integration
-- Node client service chooses endpoint dynamically:
-  - single file -> `/crop`
-  - multiple files -> `/crop/batch`
-- Includes timeout handling, network error normalization, and shared-secret header forwarding (`X-SmartCrop-Token`).
-- Health probe endpoint exists via `testSmartCropApi()` against FastAPI `/health`.
-
-### 3.4 Data model readiness
-Prisma schema includes:
-- `Session` for Shopify sessions.
-- `ShopPlanUsage` for usage limits/tracking.
-- `CropJob` for async/batch job lifecycle tracking.
-- `MediaWritebackIdempotency` for deduped writeback semantics.
-
-**Important:** The schema supports production-grade workflows, but not all tables appear fully exercised by current route handlers yet.
-
-### 3.5 Billing scaffold
-- Billing helpers are present (`Pro plan`, test-mode switch, request/cancel/check functions).
-- Core billing wiring exists in `shopify.server.js`.
+### 1.5 I/O, formats, and limits
+- Handles standard images, HEIC/HEIF (if available), and RAW (if `rawpy` available).
+- Preserves ICC profile when present; otherwise assigns sRGB fallback.
+- Output format is resolved from original extension/content-type; unsupported extensions fail with `400`.
+- Batch requests:
+  - enforce max file count
+  - produce per-file success/failure entries
+  - generate downloadable ZIP via tokenized `/downloads/{token}` URL
 
 ---
 
-## 4) Gaps that prevent “fully usable Shopify app” status
+## 2) Front-end implementation map (current)
 
-These are the highest-impact gaps inferred from current code and docs.
+### 2.1 UI layer (`CropControlCenter.jsx`)
+The UI can collect and submit:
+- source: upload or Shopify image URL
+- `pipeline`, `method`, `anchorHint`
+- `targetAspectRatio`, margins
+- `filters` (sharpen/detail/grayscale)
+- toggles:
+  - `headRotationHeuristicEnabled` (face pipelines)
+  - `centerBiasHeuristicEnabled` (salience/heuristic pipelines)
+  - `overrideImageSizeLimit`
 
-### 4.1 Inconsistent crop route behavior (`/app/crop` vs `/api/crop`)
-- `/app/crop` action forwards richer option set (pipeline/method/filters/anchor/head rotation).
-- `/api/crop` currently forces `pipeline: "auto"` and handles fewer options.
+### 2.2 Route action A (`app/routes/app.crop.jsx`)
+This path is close to backend contract:
+- accepts upload and URL source
+- forwards:
+  - `pipeline`, `method`, aspect ratio, margins
+  - `anchorHint`, `filters`
+  - head-rotation / center-bias / size-override booleans
+- uses `cropImagesWithOutputs()` client to map to backend field names
 
-**Impact:** Different behavior paths can produce unexpected results and undermine reliability.
-
-### 4.2 UI currently custom-styled rather than Shopify Polaris/App Bridge components
-- Functional, but not yet aligned with expected embedded Shopify UX conventions and accessibility patterns.
-
-**Impact:** Merchant trust and app review readiness may be weaker.
-
-### 4.3 “Write back to Shopify media” needs explicit hardening/verification path
-- Product search is implemented; crop output plumbing exists.
-- But explicit end-to-end server-side mutation + idempotency usage + user-visible success accounting should be validated and made transparent in the UX.
-
-**Impact:** Merchant value depends on reliable in-place media updates, not just preview/download outputs.
-
-### 4.4 Observability + reliability UX gaps
-- Status and errors are present but not yet at full per-file lifecycle quality (queued/processing/completed/failed with retry guidance).
-- Need stronger pipeline branch observability for debugging and support.
-
-### 4.5 Test coverage is thin for this complexity level
-- Existing tests are mostly around crop contract in FastAPI test folder.
-- Node route integration and Shopify media writeback behavior need deeper automated coverage.
-
----
-
-## 5) Definition of “usable app on Shopify” (target state)
-
-The app should be considered usable when all are true:
-1. Merchant can install, auth, and stay in-session reliably.
-2. Merchant can search/select Shopify media or upload local media.
-3. Merchant can preview and run crop for single and multi-file jobs.
-4. Merchant gets clear per-file status + actionable failures.
-5. Cropped output writes back to Shopify media reliably with idempotency safeguards.
-6. Usage/billing behavior is predictable (free/pro usage model enforced).
-7. App has operational visibility (health, logs, branch path, failure metrics).
-8. Core workflows are covered by automated tests.
+### 2.3 Route action B (`app/routes/api.crop.jsx`)
+This path is **not 1:1** with backend contract:
+- hardcodes `pipeline: "auto"`
+- does **not** pass:
+  - `anchorHint`
+  - `filters`
+  - `useHeadRotationHeuristic`
+  - `useCenterBiasHeuristic`
+  - `overrideImageSizeLimit`
+- only forwards method + aspect/margins
 
 ---
 
-## 6) Recommended development plan from current state
+## 3) 1:1 comparison matrix (backend vs front-end)
 
-### Phase A — Stabilize API behavior parity (P0)
-1. Consolidate crop request parsing/validation into a shared utility used by both `/app/crop` and `/api/crop`.
-2. Ensure both routes pass identical crop option contracts.
-3. Standardize response schema (`status`, `mediaUpdates`, `summary`, `errors`) across all crop paths.
-
-**Exit criteria:** Same input yields same behavior from both routes.
-
-### Phase B — Production writeback reliability (P0)
-1. Implement/verify explicit Shopify media mutation path for each successful crop.
-2. Enforce idempotency via `MediaWritebackIdempotency` table on write operations.
-3. Store audit metadata (source media id, destination id, params hash, status/error).
-
-**Exit criteria:** Re-running same crop request is safe and deterministic.
-
-### Phase C — Merchant UX readiness (P1)
-1. Migrate main control surfaces to Polaris/App Bridge components.
-2. Add per-file progress timeline and clearer error banners.
-3. Add explicit “Preview estimate vs final processed output” UI labels.
-
-**Exit criteria:** A non-technical merchant can complete crop->writeback without confusion.
-
-### Phase D — Billing and plan enforcement (P1)
-1. Add usage accounting increments on successful processing/writeback.
-2. Enforce free-tier limits based on `ShopPlanUsage`.
-3. Add in-app billing page state clarity (current plan, quota, upgrade CTA).
-
-**Exit criteria:** Plan behavior is enforceable and transparent.
-
-### Phase E — Test and release hardening (P0/P1)
-1. Node route tests:
-   - `/api/crop` single + batch,
-   - `/api/products` auth + mapping,
-   - error normalization paths.
-2. FastAPI tests:
-   - branch coverage for `/crop` and `/crop/batch`,
-   - auth token enforcement,
-   - contract consistency for success/error.
-3. Add a smoke checklist for deploy (health + Shopify auth + crop + writeback).
-
-**Exit criteria:** Regressions are caught before deploy.
+| Capability | Backend (`main.py`) | `/app/crop` action | `/api/crop` action | Parity |
+|---|---|---|---|---|
+| Upload file crop | ✅ | ✅ | ✅ | ✅ |
+| URL-based crop source | Backend accepts file upload only (URL fetch must happen in Node) | ✅ (fetches URL then uploads) | ✅ (fetches URL then uploads) | ✅ |
+| `pipeline` selection | ✅ | ✅ | ❌ (`auto` forced) | ❌ |
+| Full method matrix by pipeline | ✅ | ✅ | ⚠️ Partial (method sent, but with forced pipeline) | ❌ |
+| `target_aspect_ratio` | ✅ | ✅ | ✅ | ✅ |
+| Margins (4 sides) | ✅ | ✅ | ✅ | ✅ |
+| `anchor_hint` | ✅ | ✅ | ❌ | ❌ |
+| `crop_coordinates` manual crop | ✅ | ❌ (not exposed) | ❌ | ❌ |
+| `filters` | ✅ | ✅ | ❌ | ❌ |
+| `use_head_rotation_heuristic` | ✅ | ✅ | ❌ | ❌ |
+| `use_center_bias_heuristic` | ✅ | ✅ | ❌ | ❌ |
+| `override_image_size_limit` | ✅ | ✅ | ❌ | ❌ |
+| Canonical response usage | ✅ | ✅ (via client normalizer) | ✅ (via client normalizer) | ✅ |
 
 ---
 
-## 7) Immediate next tasks (suggested first sprint)
+## 4) Why parity is currently broken
+The app currently exposes **two server entry points** to cropping with different option forwarding behavior:
+- `/app/crop` keeps most of the backend contract intact.
+- `/api/crop` drops multiple backend-supported fields and forces `pipeline: auto`.
 
-1. **Unify crop contract layer** between `/app/crop` and `/api/crop`.
-2. **Add explicit writeback service module** with idempotency checks.
-3. **Instrument pipeline branch logging** (route + FastAPI response metadata).
-4. **Ship 6–8 integration tests** covering single/batch success + mixed failures.
-5. **Polaris migration for core form/status components** (minimal first pass).
-
----
-
-## 8) Risk register
-
-- **Cold starts / timeouts** on free Render plans can degrade UX for larger jobs.
-- **Auth context mismatch** (embedded + preview mode differences) can produce confusing failures.
-- **Contract drift** between Node and FastAPI can break edge-case requests.
-- **Model load/memory pressure** in FastAPI may impact batch reliability without queue controls.
+As long as both remain active, behavior differs by route even for the same UI intent.
 
 ---
 
-## 9) Non-goals until stability is complete
-
-- No major config churn across Shopify/Render/FastAPI unless required for incident fixes.
-- No speculative feature expansion before contract parity + writeback reliability are complete.
-
----
-
-## 10) Working assumptions
-
-- Node app remains source of truth for merchant auth/session and Shopify API operations.
-- FastAPI remains source of truth for crop computation.
-- Direct media writeback (not ZIP-only fallback) is the primary merchant workflow.
+## 5) Minimal fix plan to restore 1:1
+1. Extract shared form parsing for crop options used by both route actions.
+2. Make `/api/crop` forward the exact same option set as `/app/crop`.
+3. Add contract tests that post identical form payloads to both paths and assert identical outgoing options / equivalent responses.
+4. (Optional) expose `crop_coordinates` in UI if manual crop is a product requirement.
 
 ---
 
-## 11) Document ownership
-
-Update this file whenever any of the following changes:
-- API contracts between UI/Node/FastAPI,
-- Shopify scopes/auth/billing behavior,
-- DB models used in production flow,
-- deployment/runtime assumptions.
-
-If conflicts exist between historical docs and this file, **this file should be treated as the current operational baseline** until superseded.
-
----
-
-## 12) Heuristics implementation findings (April 16, 2026)
-
-After reviewing the current crop flow, the following behavior was confirmed:
-
-1. **Head-rotation toggle exists, but only affects one method branch.**
-   - `use_head_rotation_heuristic` is only consumed by `head_bust_crop(...)`.
-   - For other face methods (`auto`, `frontal`, `profile`, etc.), head-rotation toggles in the UI do not change behavior.
-
-2. **Salience center-bias fallback existed in code but was always enabled.**
-   - `compute_candidate_crop_box(..., use_center_bias_fallback=True)` was hardcoded, so there was no user-level way to disable that heuristic.
-
-3. **Heuristics were not independently configurable end-to-end.**
-   - UI exposed head rotation only.
-   - Backend had at least one additional heuristic (`use_center_bias_fallback`) but no API contract field for it.
-
-4. **Image-size guardrails were hard stops without request-level override.**
-   - Upload-size checks and decoded-image hard-stop logic could block large files even for intentional high-resolution use cases.
-
-### Current remediation now implemented
-
-- Added independent API/UI heuristic controls:
-  - `use_head_rotation_heuristic` (face pipeline / head-bust path),
-  - `use_center_bias_heuristic` (salience/heuristic pipeline fallback behavior).
-- Added request-level size override:
-  - `override_image_size_limit=true` (with server-side opt-out via `SMARTCROP_ALLOW_SIZE_LIMIT_OVERRIDE=0`).
-
-This closes the mismatch where heuristics existed internally but were not independently user-controllable.
+## 6) One-line status
+Backend contract is rich and consistent; front-end parity is **partially implemented** because `/api/crop` is still on a reduced contract.
