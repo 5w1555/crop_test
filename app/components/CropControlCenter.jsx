@@ -255,6 +255,12 @@ export default function CropControlCenter() {
   const [selectedFilters, setSelectedFilters] = useState([]);
   const [margins, setMargins] = useState(EMPTY_MARGINS);
   const [isCropping, setIsCropping] = useState(false);
+  const [progress, setProgress] = useState({
+    isVisible: false,
+    total: 0,
+    completed: 0,
+    statusText: "",
+  });
   const [result, setResult] = useState(null);
   const [errorMessage, setErrorMessage] = useState("");
 
@@ -334,51 +340,109 @@ export default function CropControlCenter() {
     setIsCropping(true);
     setErrorMessage("");
     setResult(null);
+    const itemsToProcess =
+      sourceType === "upload"
+        ? files.map((file) => ({ type: "file", value: file }))
+        : selectedImageUrl
+          ? [{ type: "imageUrl", value: selectedImageUrl }]
+          : [];
+    const totalItems = itemsToProcess.length;
 
-    const form = new FormData();
+    setProgress({
+      isVisible: totalItems > 0,
+      total: totalItems,
+      completed: 0,
+      statusText: totalItems > 1 ? "Starting batch crop…" : "Starting crop…",
+    });
 
-    if (sourceType === "upload") {
-      files.forEach((file) => form.append("file", file));
-    } else if (selectedImageUrl) {
-      form.append("imageUrl", selectedImageUrl);
-    }
-
-    form.append("pipeline", pipeline);
-    form.append("method", method);
-    form.append("anchorHint", anchorHint);
-    if (isFacePipeline) form.append("headRotationHeuristicEnabled", String(headRotationHeuristicEnabled));
-    if (isSaliencePipeline) form.append("centerBiasHeuristicEnabled", String(centerBiasHeuristicEnabled));
-    form.append("overrideImageSizeLimit", String(overrideImageSizeLimit));
-    if (selectedFilters.length) form.append("filters", selectedFilters.join(","));
-    if (targetAspectRatio !== "") form.append("targetAspectRatio", targetAspectRatio);
-    if (margins.top !== "") form.append("marginTop", margins.top);
-    if (margins.right !== "") form.append("marginRight", margins.right);
-    if (margins.bottom !== "") form.append("marginBottom", margins.bottom);
-    if (margins.left !== "") form.append("marginLeft", margins.left);
-
-    try {
-      const response = await fetch(cropActionPath, {
-        method: "POST",
-        headers: { Accept: "application/json" },
-        body: form,
-      });
-      const { payload, rawBody, isJson } = await parseJsonResponseSafely(response);
-
-      if (!isJson) {
-        throw new Error(formatUnexpectedResponse(response, rawBody));
+    const buildRequestForm = (item) => {
+      const form = new FormData();
+      if (item.type === "file") {
+        form.append("file", item.value);
+      } else if (item.type === "imageUrl") {
+        form.append("imageUrl", item.value);
       }
 
-      setResult(payload);
+      form.append("pipeline", pipeline);
+      form.append("method", method);
+      form.append("anchorHint", anchorHint);
+      if (isFacePipeline) form.append("headRotationHeuristicEnabled", String(headRotationHeuristicEnabled));
+      if (isSaliencePipeline) form.append("centerBiasHeuristicEnabled", String(centerBiasHeuristicEnabled));
+      form.append("overrideImageSizeLimit", String(overrideImageSizeLimit));
+      if (selectedFilters.length) form.append("filters", selectedFilters.join(","));
+      if (targetAspectRatio !== "") form.append("targetAspectRatio", targetAspectRatio);
+      if (margins.top !== "") form.append("marginTop", margins.top);
+      if (margins.right !== "") form.append("marginRight", margins.right);
+      if (margins.bottom !== "") form.append("marginBottom", margins.bottom);
+      if (margins.left !== "") form.append("marginLeft", margins.left);
+      return form;
+    };
 
-      if (!response.ok || payload.error) {
-        setErrorMessage(payload.errorDetails || payload.error || "Crop failed");
+    try {
+      const allMediaUpdates = [];
+      const allErrors = [];
+
+      for (let index = 0; index < itemsToProcess.length; index += 1) {
+        const currentItem = itemsToProcess[index];
+        const response = await fetch(cropActionPath, {
+          method: "POST",
+          headers: { Accept: "application/json" },
+          body: buildRequestForm(currentItem),
+        });
+        const { payload, rawBody, isJson } = await parseJsonResponseSafely(response);
+
+        if (!isJson) {
+          throw new Error(formatUnexpectedResponse(response, rawBody));
+        }
+
+        const currentMediaUpdates = resolveResultMediaUpdates(payload);
+        allMediaUpdates.push(...currentMediaUpdates);
+        if (Array.isArray(payload?.errors)) {
+          allErrors.push(...payload.errors);
+        }
+        if (!response.ok || payload?.error) {
+          allErrors.push({
+            message: payload?.errorDetails || payload?.error || "Crop failed",
+          });
+        }
+
+        const completed = index + 1;
+        setProgress({
+          isVisible: true,
+          total: totalItems,
+          completed,
+          statusText: completed === totalItems ? "Finalizing results…" : "Processing next image…",
+        });
+      }
+
+      const failedCount = allMediaUpdates.filter((update) => update?.status === "failed").length;
+      const succeededCount = allMediaUpdates.length - failedCount;
+      setResult({
+        status: failedCount > 0 ? (succeededCount > 0 ? "partial_failure" : "failed") : "succeeded",
+        mediaUpdates: allMediaUpdates,
+        summary: {
+          requestedCount: totalItems,
+          succeededCount,
+          failedCount,
+        },
+        errors: allErrors,
+      });
+
+      if (allErrors.length > 0) {
+        setErrorMessage(allErrors[0]?.message || "Some images failed to crop");
       }
     } catch (error) {
       setErrorMessage(error.message || "Crop failed");
     } finally {
       setIsCropping(false);
+      setProgress((prev) => ({
+        ...prev,
+        isVisible: false,
+      }));
     }
   };
+
+  const progressPercent = progress.total > 0 ? Math.round((progress.completed / progress.total) * 100) : 0;
 
   const handleDownloadAll = () => {
     const batchDownloadUrl = result?.summary?.batchDownloadUrl;
@@ -648,6 +712,43 @@ export default function CropControlCenter() {
               </Badge>
             ) : null}
           </Inline>
+          {progress.isVisible ? (
+            <Stack gap="small">
+              <Inline>
+                <Paragraph>
+                  <strong>
+                    Processing images: {progress.completed}/{progress.total}
+                  </strong>
+                </Paragraph>
+                <Badge tone="info">{progressPercent}%</Badge>
+              </Inline>
+              <div
+                role="progressbar"
+                aria-valuemin={0}
+                aria-valuemax={progress.total || 1}
+                aria-valuenow={progress.completed}
+                aria-label="Image processing progress"
+                style={{
+                  width: "100%",
+                  height: 10,
+                  borderRadius: 999,
+                  overflow: "hidden",
+                  border: `1px solid ${tokens.colors.border}`,
+                  background: "#edf2f7",
+                }}
+              >
+                <div
+                  style={{
+                    width: `${progressPercent}%`,
+                    height: "100%",
+                    background: tokens.colors.primary,
+                    transition: "width 220ms ease",
+                  }}
+                />
+              </div>
+              <Hint>{progress.statusText}</Hint>
+            </Stack>
+          ) : null}
           {errorMessage ? <Banner tone="critical">{errorMessage}</Banner> : null}
         </Stack>
       </Card>
