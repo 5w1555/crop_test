@@ -85,15 +85,11 @@ This path is close to backend contract:
 - uses `cropImagesWithOutputs()` client to map to backend field names
 
 ### 2.3 Route action B (`app/routes/api.crop.jsx`)
-This path is **not 1:1** with backend contract:
-- hardcodes `pipeline: "auto"`
-- does **not** pass:
-  - `anchorHint`
-  - `filters`
-  - `useHeadRotationHeuristic`
-  - `useCenterBiasHeuristic`
-  - `overrideImageSizeLimit`
-- only forwards method + aspect/margins
+This path now shares the same action factory as `/app/crop`:
+- forwards `pipeline`, `method`, aspect ratio, margins
+- forwards `anchorHint`, `filters`
+- forwards all heuristic and size override toggles
+- uses the same URL-fetch + file normalization logic
 
 ---
 
@@ -103,36 +99,34 @@ This path is **not 1:1** with backend contract:
 |---|---|---|---|---|
 | Upload file crop | ✅ | ✅ | ✅ | ✅ |
 | URL-based crop source | Backend accepts file upload only (URL fetch must happen in Node) | ✅ (fetches URL then uploads) | ✅ (fetches URL then uploads) | ✅ |
-| `pipeline` selection | ✅ | ✅ | ❌ (`auto` forced) | ❌ |
-| Full method matrix by pipeline | ✅ | ✅ | ⚠️ Partial (method sent, but with forced pipeline) | ❌ |
+| `pipeline` selection | ✅ | ✅ | ✅ | ✅ |
+| Full method matrix by pipeline | ✅ | ✅ | ✅ | ✅ |
 | `target_aspect_ratio` | ✅ | ✅ | ✅ | ✅ |
 | Margins (4 sides) | ✅ | ✅ | ✅ | ✅ |
-| `anchor_hint` | ✅ | ✅ | ❌ | ❌ |
+| `anchor_hint` | ✅ | ✅ | ✅ | ✅ |
 | `crop_coordinates` manual crop | ✅ | ❌ (not exposed) | ❌ | ❌ |
-| `filters` | ✅ | ✅ | ❌ | ❌ |
-| `use_head_rotation_heuristic` | ✅ | ✅ | ❌ | ❌ |
-| `use_center_bias_heuristic` | ✅ | ✅ | ❌ | ❌ |
-| `override_image_size_limit` | ✅ | ✅ | ❌ | ❌ |
+| `filters` | ✅ | ✅ | ✅ | ✅ |
+| `use_head_rotation_heuristic` | ✅ | ✅ | ✅ | ✅ |
+| `use_center_bias_heuristic` | ✅ | ✅ | ✅ | ✅ |
+| `override_image_size_limit` | ✅ | ✅ | ✅ | ✅ |
 | Canonical response usage | ✅ | ✅ (via client normalizer) | ✅ (via client normalizer) | ✅ |
 
 ---
 
-## 4) Why parity is currently broken
-The app currently exposes **two server entry points** to cropping with different option forwarding behavior:
-- `/app/crop` keeps most of the backend contract intact.
-- `/api/crop` drops multiple backend-supported fields and forces `pipeline: auto`.
+## 4) Current parity status
+The app still exposes **two server entry points** to cropping, but they now execute the same shared action factory in `app/lib/crop/route-action.server.js`.
 
-As long as both remain active, behavior differs by route even for the same UI intent.
+This removes route-level drift for crop option parsing and forwarding.
 
 ---
 
 ## 5) Minimal fix plan to restore 1:1
-1. Extract shared form parsing for crop options used by both route actions.
-2. Make `/api/crop` forward the exact same option set as `/app/crop`.
-3. Add contract tests that post identical form payloads to both paths and assert identical outgoing options / equivalent responses.
-4. (Optional) expose `crop_coordinates` in UI if manual crop is a product requirement.
+1. ✅ Extracted shared form parsing and request construction in `app/lib/crop/route-action.server.js` and wired both routes to it.
+2. ✅ `/api/crop` now forwards the exact same option set as `/app/crop` by construction (shared factory).
+3. ✅ Added a contract test (`app/utils/crop-route-contract.test.js`) that posts identical payloads through two action instances and asserts equivalent forwarded options/responses.
+4. ⏳ (Optional) expose `crop_coordinates` in UI if manual crop is a product requirement.
 
 ---
 
 ## 6) One-line status
-Backend contract is rich and consistent; front-end parity is **partially implemented** because `/api/crop` is still on a reduced contract.
+Backend contract is rich and consistent; route-level front-end parity is now **implemented** for all currently exposed UI options, with `crop_coordinates` still not surfaced in the UI.
