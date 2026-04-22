@@ -120,13 +120,31 @@ This removes route-level drift for crop option parsing and forwarding.
 
 ---
 
-## 5) Minimal fix plan to restore 1:1
-1. ✅ Extracted shared form parsing and request construction in `app/lib/crop/route-action.server.js` and wired both routes to it.
-2. ✅ `/api/crop` now forwards the exact same option set as `/app/crop` by construction (shared factory).
-3. ✅ Added a contract test (`app/utils/crop-route-contract.test.js`) that posts identical payloads through two action instances and asserts equivalent forwarded options/responses.
-4. ⏳ (Optional) expose `crop_coordinates` in UI if manual crop is a product requirement.
+## 5) Launch readiness check (April 22, 2026)
+
+### 5.1 Checks executed
+- `npm test` ✅
+  - Contract test confirms `/app/crop` and `/api/crop` forward identical crop options.
+- `npm run typecheck` ✅
+  - Type generation + TypeScript compile pass.
+- `npm run lint` ❌
+  - Fails on `app/routes/app.jsx` with `no-undef` (`process` is not defined).
+
+### 5.2 Product/readiness observations
+- Core crop route parity is in good shape for currently exposed controls.
+- `crop_coordinates` is still unsupported in the UI, so backend capability is not fully surfaced.
+- Roadmap still marks the app as **preview mode** and lists launch-blocking items for preview exit:
+  - fully hardened multi-file handling UX,
+  - real-time crop preview behavior,
+  - explicit end-user access to all crop capabilities,
+  - stronger pipeline execution verification coverage.
+
+### 5.3 Launch verdict
+**Not ready for full launch yet.**
+
+Reason: although core crop contract parity and tests are in place, there is an active lint error in the main app code path and roadmap-defined preview-exit requirements remain incomplete.
 
 ---
 
 ## 6) One-line status
-Backend contract is rich and consistent; route-level front-end parity is now **implemented** for all currently exposed UI options, with `crop_coordinates` still not surfaced in the UI.
+Backend/front-end crop option parity is largely implemented, but the app should remain in **preview/stabilization** until lint is clean and preview-exit roadmap criteria are complete.
