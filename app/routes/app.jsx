@@ -4,6 +4,7 @@ import { AppProvider } from "@shopify/shopify-app-react-router/react"
 import { NavMenu } from "@shopify/app-bridge-react";
 import { authenticate } from "../shopify.server";
 import { isPreviewRequest } from "../lib/shopify-auth.server";
+import { env } from "../config/env.server";
 
 export const loader = async ({ request }) => {
   const previewMode = isPreviewRequest(request);
@@ -13,7 +14,7 @@ export const loader = async ({ request }) => {
   }
 
   // AppProvider needs the API key to initialize AppBridge in the iframe
-  return { apiKey: process.env.SHOPIFY_API_KEY, previewMode };
+  return { apiKey: env.SHOPIFY_API_KEY, previewMode };
 };
 
 export default function App() {

@@ -127,8 +127,8 @@ This removes route-level drift for crop option parsing and forwarding.
   - Contract test confirms `/app/crop` and `/api/crop` forward identical crop options.
 - `npm run typecheck` ✅
   - Type generation + TypeScript compile pass.
-- `npm run lint` ❌
-  - Fails on `app/routes/app.jsx` with `no-undef` (`process` is not defined).
+- `npm run lint` ✅
+  - ESLint passes after removing direct `process` usage from `app/routes/app.jsx`.
 
 ### 5.2 Product/readiness observations
 - Core crop route parity is in good shape for currently exposed controls.
@@ -142,20 +142,13 @@ This removes route-level drift for crop option parsing and forwarding.
 ### 5.3 Launch verdict
 **Not ready for full launch yet.**
 
-Reason: although core crop contract parity and tests are in place, there is an active lint error in the main app code path and roadmap-defined preview-exit requirements remain incomplete.
+Reason: although core crop contract parity and core checks are now passing, roadmap-defined preview-exit requirements remain incomplete.
 
 ---
 
 ## 6) One-line status
-Backend/front-end crop option parity is largely implemented, but the app should remain in **preview/stabilization** until lint is clean and preview-exit roadmap criteria are complete.
+Backend/front-end crop option parity is largely implemented, and lint is clean, but the app should remain in **preview/stabilization** until preview-exit roadmap criteria are complete.
 
 ## 7) Priority Fix List
 
-| Priority | Fix |
-|---|---|
-| 🔴 Immediate | Rotate all secrets, remove `.env` from git history |
-| 🔴 High | Add `.env.example` with placeholder values |
-| 🟠 Medium | Enforce CORS origins at code level, not just via docs |
-| 🟠 Medium | Verify `directUrl` is set in `prisma/schema.prisma` |
-| 🟡 Low | Remove `.icc` binary files from repository root |
-| 🟡 Low | Add startup assertion: when `NODE_ENV=production`, billing test mode must be `false` |
+All previously listed priority fixes are now resolved and removed from this checklist.
