@@ -148,3 +148,14 @@ Reason: although core crop contract parity and tests are in place, there is an a
 
 ## 6) One-line status
 Backend/front-end crop option parity is largely implemented, but the app should remain in **preview/stabilization** until lint is clean and preview-exit roadmap criteria are complete.
+
+## 7) Priority Fix List
+
+| Priority | Fix |
+|---|---|
+| 🔴 Immediate | Rotate all secrets, remove `.env` from git history |
+| 🔴 High | Add `.env.example` with placeholder values |
+| 🟠 Medium | Enforce CORS origins at code level, not just via docs |
+| 🟠 Medium | Verify `directUrl` is set in `prisma/schema.prisma` |
+| 🟡 Low | Remove `.icc` binary files from repository root |
+| 🟡 Low | Add startup assertion: when `NODE_ENV=production`, billing test mode must be `false` |
