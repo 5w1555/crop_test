@@ -1667,6 +1667,13 @@ def _parse_env_bool(name: str, default: str = "0") -> bool:
     raise RuntimeError(f"{name} must be a boolean-like value (true/false). Received: {raw_value!r}")
 
 
+def _parse_frontend_origins_from_env() -> list[str]:
+    origins_env = os.getenv("SMARTCROP_FRONTEND_ORIGINS", "")
+    if origins_env.strip():
+        return [origin.strip() for origin in origins_env.split(",") if origin.strip()]
+    return ["http://localhost:3000", "http://127.0.0.1:3000"]
+
+
 def _validate_fastapi_startup_env() -> None:
     errors: list[str] = []
 
@@ -1693,6 +1700,10 @@ def _validate_fastapi_startup_env() -> None:
             errors.append("SMARTCROP_API_TOKEN is required in production.")
         if not os.getenv("SMARTCROP_FRONTEND_ORIGINS"):
             errors.append("SMARTCROP_FRONTEND_ORIGINS is required in production.")
+        else:
+            parsed_origins = _parse_frontend_origins_from_env()
+            if "*" in parsed_origins:
+                errors.append("SMARTCROP_FRONTEND_ORIGINS cannot include '*' in production.")
 
     if errors:
         joined = "\n- ".join(errors)
@@ -1948,11 +1959,7 @@ async def crop_request_slot():
 
 
 # Configure CORS origins via environment variable SMARTCROP_FRONTEND_ORIGINS
-origins_env = os.getenv("SMARTCROP_FRONTEND_ORIGINS")
-if origins_env:
-    origins = [o.strip() for o in origins_env.split(",") if o.strip()]
-else:
-    origins = ["http://localhost:3000", "http://127.0.0.1:3000"]
+origins = _parse_frontend_origins_from_env()
 
 # Browsers disallow credentialed CORS when a wildcard origin is used.
 allow_credentials = "*" not in origins
