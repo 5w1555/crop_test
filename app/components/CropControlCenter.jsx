@@ -249,7 +249,7 @@ export default function CropControlCenter() {
   const [method, setMethod] = useState("auto");
   const [targetAspectRatio, setTargetAspectRatio] = useState("");
   const [anchorHint, setAnchorHint] = useState("auto");
-  const [headRotationMode, setHeadRotationMode] = useState("enabled");
+  const [headRotationMode, setHeadRotationMode] = useState("disabled");
   const [centerBiasMode, setCenterBiasMode] = useState("enabled");
   const [overrideImageSizeLimit, setOverrideImageSizeLimit] = useState(false);
   const [selectedFilters, setSelectedFilters] = useState([]);
@@ -291,7 +291,6 @@ export default function CropControlCenter() {
   const availableMethods = pipeline === "salience" || pipeline === "heuristic" ? SALIENCE_PIPELINE_METHODS : FACE_PIPELINE_METHODS;
   const headRotationHeuristicEnabled = headRotationMode === "enabled";
   const centerBiasHeuristicEnabled = centerBiasMode === "enabled";
-  const isFacePipeline = pipeline === "auto" || pipeline === "face";
   const isSaliencePipeline = pipeline === "salience" || pipeline === "heuristic";
 
   const toggleFilter = (filterName) => {
@@ -366,7 +365,7 @@ export default function CropControlCenter() {
       form.append("pipeline", pipeline);
       form.append("method", method);
       form.append("anchorHint", anchorHint);
-      if (isFacePipeline) form.append("headRotationHeuristicEnabled", String(headRotationHeuristicEnabled));
+      form.append("headRotationHeuristicEnabled", String(headRotationHeuristicEnabled));
       if (isSaliencePipeline) form.append("centerBiasHeuristicEnabled", String(centerBiasHeuristicEnabled));
       form.append("overrideImageSizeLimit", String(overrideImageSizeLimit));
       if (selectedFilters.length) form.append("filters", selectedFilters.join(","));
@@ -584,33 +583,29 @@ export default function CropControlCenter() {
             <Stack gap="small">
               <Label>Head rotation heuristic</Label>
               <Inline>
-                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6, opacity: isFacePipeline ? 1 : 0.6 }}>
+                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <input
                     type="radio"
                     name="headRotationMode"
                     value="enabled"
                     checked={headRotationMode === "enabled"}
-                    disabled={!isFacePipeline}
                     onChange={(e) => setHeadRotationMode(e.target.value)}
                   />
                   Enabled
                 </label>
-                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6, opacity: isFacePipeline ? 1 : 0.6 }}>
+                <label style={{ fontSize: "14px", display: "inline-flex", alignItems: "center", gap: 6 }}>
                   <input
                     type="radio"
                     name="headRotationMode"
                     value="disabled"
                     checked={headRotationMode === "disabled"}
-                    disabled={!isFacePipeline}
                     onChange={(e) => setHeadRotationMode(e.target.value)}
                   />
                   Disabled
                 </label>
               </Inline>
               <Hint>
-                {isFacePipeline
-                  ? "Explicitly enable or disable head rotation for face-aware crops."
-                  : "This option applies only to auto and face pipelines."}
+                Explicitly enable or disable landmark-based head rotation. This is controlled only by this setting.
               </Hint>
             </Stack>
             <Stack gap="small">

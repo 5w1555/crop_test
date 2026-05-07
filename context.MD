@@ -31,7 +31,7 @@ All crop endpoints require `X-SmartCrop-Token` when configured and return canoni
 - `anchor_hint`: `auto | top | center | bottom | left | right`
 - `crop_coordinates`: normalized fractional JSON `{left, top, width, height}` (+ optional source dimensions)
 - `filters`: CSV or JSON array, allowed: `sharpen | detail | grayscale`
-- `use_head_rotation_heuristic`: optional boolean
+- `use_head_rotation_heuristic`: optional boolean; defaults off and is controlled only by this flag, not by pipeline/method/anchor hint
 - `use_center_bias_heuristic`: optional boolean
 - `override_image_size_limit`: optional boolean (can be disabled server-side)
 
@@ -71,7 +71,7 @@ The UI can collect and submit:
 - `targetAspectRatio`, margins
 - `filters` (sharpen/detail/grayscale)
 - toggles:
-  - `headRotationHeuristicEnabled` (face pipelines)
+  - `headRotationHeuristicEnabled` (global explicit head-rotation toggle)
   - `centerBiasHeuristicEnabled` (salience/heuristic pipelines)
   - `overrideImageSizeLimit`
 
