@@ -187,6 +187,50 @@ def test_resolve_output_format_rejects_unsupported_files(fastapi_main_module):
     assert exc_info.value.status_code == 400
 
 
+def test_run_crop_pipeline_only_rotates_when_head_rotation_explicitly_enabled(monkeypatch, fastapi_main_module):
+    image = Image.new("RGB", (120, 100), "white")
+    captured_apply_rotation = []
+
+    def fake_get_face_and_landmarks(*args, **kwargs):
+        captured_apply_rotation.append(kwargs.get("apply_rotation"))
+        return ([1, 2, 3, 4], {"left_eye": (1, 1), "right_eye": (3, 1)}, "cv", image, {})
+
+    monkeypatch.setattr(fastapi_main_module, "get_face_and_landmarks", fake_get_face_and_landmarks)
+    monkeypatch.setattr(fastapi_main_module, "auto_crop", lambda *args, **kwargs: "auto-result")
+    monkeypatch.setattr(fastapi_main_module, "apply_crop_postprocessing", lambda cropped, crop_options: cropped)
+
+    fastapi_main_module.run_crop_pipeline("tmp.jpg", "auto", fastapi_main_module.CropOptions())
+    fastapi_main_module.run_crop_pipeline(
+        "tmp.jpg",
+        "auto",
+        fastapi_main_module.CropOptions(use_head_rotation_heuristic=True),
+    )
+
+    assert captured_apply_rotation == [False, True]
+
+
+def test_run_crop_pipeline_head_bust_defaults_rotation_heuristic_off(monkeypatch, fastapi_main_module):
+    image = Image.new("RGB", (120, 100), "white")
+    captured = {}
+
+    monkeypatch.setattr(
+        fastapi_main_module,
+        "get_face_and_landmarks",
+        lambda *args, **kwargs: ([1, 2, 3, 4], {"left_eye": (1, 1), "right_eye": (3, 1)}, "cv", image, {}),
+    )
+
+    def fake_head_bust_crop(*args, **kwargs):
+        captured["use_rotation_heuristic"] = kwargs.get("use_rotation_heuristic")
+        return "head-bust-result"
+
+    monkeypatch.setattr(fastapi_main_module, "head_bust_crop", fake_head_bust_crop)
+    monkeypatch.setattr(fastapi_main_module, "apply_crop_postprocessing", lambda cropped, crop_options: cropped)
+
+    fastapi_main_module.run_crop_pipeline("tmp.jpg", "head_bust", fastapi_main_module.CropOptions())
+
+    assert captured["use_rotation_heuristic"] is False
+
+
 def test_run_crop_pipeline_falls_back_to_center_content_when_face_missing(monkeypatch, fastapi_main_module):
     sentinel_output = SimpleNamespace(name="center")
     captured = {}

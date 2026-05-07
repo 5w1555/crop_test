@@ -494,7 +494,7 @@ def get_face_and_landmarks(
     input_path,
     conf_threshold=0.3,
     sharpen=True,
-    apply_rotation=True,
+    apply_rotation=False,
     override_size_limits=False,
     model=None,  # ✅ NEW: allow external model injection
 ):
@@ -879,7 +879,7 @@ def head_bust_crop(input_path,
                    margin=40,
                    target_ratio=None,
                    conf_threshold=0.3,
-                   use_rotation_heuristic=True,
+                   use_rotation_heuristic=False,
                    override_size_limits=False):
     """
     Reworked to avoid off-set rotations:
@@ -1505,7 +1505,7 @@ def process_images_threaded(
     use_profile=True,
     progress_callback=None,
     cancel_func=None,
-    apply_rotation=True,
+    apply_rotation=False,
     crop_style="auto",
     filter_name="None",
     filter_intensity=50,
@@ -2105,6 +2105,7 @@ def run_crop_pipeline(
     box, landmarks, cv_img, pil_img, metadata = get_face_and_landmarks(
         temp_path,
         conf_threshold=0.3,
+        apply_rotation=(crop_options.use_head_rotation_heuristic is True),
         override_size_limits=(crop_options.override_image_size_limit is True),
     )
 
@@ -2124,7 +2125,7 @@ def run_crop_pipeline(
         elif normalized_method == "head_bust":
             cropped = head_bust_crop(
                 temp_path,
-                use_rotation_heuristic=(crop_options.use_head_rotation_heuristic is not False),
+                use_rotation_heuristic=(crop_options.use_head_rotation_heuristic is True),
                 override_size_limits=(crop_options.override_image_size_limit is True),
             )
         elif normalized_method == "auto":
